@@ -1,0 +1,26 @@
+{
+  "role": "hunter",
+  "opponent": "path",
+  "steps": 300000,
+  "minutes": 8.53,
+  "train_maps_win": 0.3,
+  "val_maps_win": 0.42,
+  "train_stats": {
+    "n": 50,
+    "hunter_win": 0.3,
+    "evader_win": 0.3,
+    "timeout": 0.4,
+    "mean_len": 115.54,
+    "ret_hunter": -0.9562000000000006,
+    "ret_evader": -0.6428000000000005
+  },
+  "val_stats": {
+    "n": 50,
+    "hunter_win": 0.42,
+    "evader_win": 0.2,
+    "timeout": 0.38,
+    "mean_len": 117.3,
+    "ret_hunter": -0.7220000000000006,
+    "ret_evader": -0.9080000000000006
+  }
+}

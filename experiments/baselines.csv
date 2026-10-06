@@ -1,0 +1,12 @@
+hunter,evader,split,n,hunter_win,evader_win,timeout,mean_len,ret_hunter,ret_evader
+random,random,val,100,0.03,0.0,0.97,196.89,-1.910000000000001,-1.944300000000001
+chase,random,val,100,0.99,0.0,0.01,43.01,0.7962,-1.4007999999999998
+random,path,val,100,0.06,0.93,0.01,50.64,-1.1972,0.9103000000000003
+chase,path,val,100,0.39,0.61,0.0,44.0,-0.42969999999999997,0.1466
+chase_oracle,path,val,100,0.49,0.51,0.0,43.51,-0.22060000000000002,-0.05939999999999999
+ppo:experiments/hunter_vs_path_s0/model,path,val,100,0.43,0.21,0.36,114.09,-0.7017000000000005,-0.8812000000000003
+ppo:experiments/hunter_vs_path_s0/model,random,val,100,0.0,0.0,1.0,200.0,-1.9808000000000014,-1.9406000000000014
+ppo:experiments/hunter_vs_random_s0/model,path,val,100,0.17,0.78,0.05,53.33,-0.9492000000000002,0.5745999999999999
+ppo:experiments/hunter_vs_random_s0/model,random,val,100,0.09,0.0,0.91,191.24,-1.7859000000000014,-1.9441000000000015
+chase,ppo:experiments/evader_vs_chase_s0/model,val,100,0.49,0.42,0.09,74.51,-0.4406000000000003,-0.5584000000000002
+random,ppo:experiments/evader_vs_chase_s0/model,val,100,0.01,0.11,0.88,185.05,-1.8946000000000007,-1.5900000000000012

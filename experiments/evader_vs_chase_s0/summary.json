@@ -1,0 +1,26 @@
+{
+  "role": "evader",
+  "opponent": "chase",
+  "steps": 600000,
+  "minutes": 13.6,
+  "train_maps_win": 0.38,
+  "val_maps_win": 0.48,
+  "train_stats": {
+    "n": 50,
+    "hunter_win": 0.44,
+    "evader_win": 0.38,
+    "timeout": 0.18,
+    "mean_len": 84.9,
+    "ret_hunter": -0.5730000000000004,
+    "ret_evader": -0.6792000000000002
+  },
+  "val_stats": {
+    "n": 50,
+    "hunter_win": 0.48,
+    "evader_win": 0.48,
+    "timeout": 0.04,
+    "mean_len": 71.36,
+    "ret_hunter": -0.46900000000000036,
+    "ret_evader": -0.4406000000000002
+  }
+}
