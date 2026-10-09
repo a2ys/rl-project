@@ -1,30 +1,22 @@
-"""Single source of truth for colours and fonts used by every visualization module.
-
-The palette is deliberately narrow: cool desaturated stone, one warm torch accent,
-and four signal colours (hunter red, evader blue, key gold, exit green).
-"""
 from PIL import ImageFont
 
-# --- dungeon stone -----------------------------------------------------------
-VOID = (10, 9, 16)                  # solid rock never seen from a floor tile
+VOID = (10, 9, 16)
 FLOOR_BASE = (84, 82, 100)
 FLOOR_MORTAR = (46, 44, 60)
 FLOOR_HILITE = (112, 110, 128)
 CRACK = (38, 36, 50)
 WALL_TOP = (112, 108, 134)
-WALL_TOP_RIM = (168, 164, 192)      # lit edge facing the viewer's far side
+WALL_TOP_RIM = (168, 164, 192)
 WALL_FRONT = (70, 66, 90)
 WALL_FRONT_DARK = (46, 43, 62)
 MORTAR = (34, 31, 46)
 
-# --- lighting ----------------------------------------------------------------
-AMBIENT = (0.62, 0.65, 0.84)        # cool moonlit base multiplier
-TORCH_LIGHT = (1.00, 0.62, 0.30)    # warm radial light multiplier
+AMBIENT = (0.62, 0.65, 0.84)
+TORCH_LIGHT = (1.00, 0.62, 0.30)
 TORCH_FLAME = (255, 168, 64)
 EXIT_LIGHT = (0.25, 0.95, 0.60)
 VIGNETTE_STRENGTH = 0.55
 
-# --- signal colours ----------------------------------------------------------
 HUNTER = (206, 62, 58)
 EVADER = (88, 168, 236)
 KEY_GOLD = (244, 196, 64)
@@ -36,7 +28,6 @@ BONE = (232, 222, 200)
 OUTLINE = (16, 12, 20)
 TIMEOUT = (150, 146, 170)
 
-# --- interface ---------------------------------------------------------------
 UI_BG = (14, 13, 22)
 PANEL_FILL = (20, 18, 30, 205)
 PANEL_EDGE = (92, 84, 120, 150)
@@ -62,7 +53,6 @@ _FONT_FILES = {"title": ("georgiab.ttf", "segoeuib.ttf", "arialbd.ttf"),
 
 
 def font(size, kind="ui"):
-    """Cached TrueType font with a graceful fallback chain (Windows first)."""
     key = (int(size), kind)
     if key not in _FONTS:
         loaded = None
@@ -82,17 +72,14 @@ def font(size, kind="ui"):
 
 
 def shade(c, f):
-    """Scale an RGB colour's brightness."""
     return tuple(max(0, min(255, int(v * f))) for v in c[:3])
 
 
 def mix(a, b, t):
-    """Linear blend of two RGB colours."""
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
 def heat_color(v):
-    """0..1 -> indigo -> ember -> gold (value heatmap ramp)."""
     v = max(0.0, min(1.0, float(v)))
     for (a, ca), (b, cb) in zip(HEAT_STOPS, HEAT_STOPS[1:]):
         if v <= b:

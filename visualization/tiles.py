@@ -1,16 +1,3 @@
-"""Static dungeon layer: stone floor, extruded walls, props, baked lighting.
-
-Output of `build_static_map` (cached per map and tile size by the renderer):
-  floor   RGB image of the whole map (flagstones, ambient occlusion, lighting)
-  strips  per-row RGBA images of everything that can hide a moving sprite
-          (wall blocks, pillars, crates); row r's strip starts at image y = r * T
-  occ     all strips composited, drawn over the floor for the base scene
-  torches (flame_x, flame_y, light_x, light_y) in image pixels
-
-Geometry: tile (r, c) has footprint [c*T, (c+1)*T) x [Hh + r*T, Hh + (r+1)*T). A wall is
-a block Hh pixels tall: its top face is the footprint shifted up by Hh, its front face
-fills the gap below the top face. Drawing rows top to bottom therefore sorts by depth.
-"""
 from dataclasses import dataclass
 
 import numpy as np
@@ -19,9 +6,9 @@ from PIL import Image, ImageDraw, ImageFilter
 from visualization import theme as th
 from visualization.props import Props, obstacle_kind
 
-TORCH_SPACING = 5.5       # minimum distance between torches, in tiles
-TORCH_RADIUS = 4.4        # light radius in tiles
-LIGHT_RES = 4             # light map is computed at 1/LIGHT_RES resolution
+TORCH_SPACING = 5.5
+TORCH_RADIUS = 4.4
+LIGHT_RES = 4
 
 
 @dataclass
@@ -30,44 +17,42 @@ class StaticMap:
     strips: list
     occ: Image.Image
     torches: list
-    walkable: Image.Image      # L mask (map footprint area) of non-rock tiles, for overlays
+    walkable: Image.Image
 
 
 def _jitter(c, v):
     return tuple(max(0, min(255, int(x + v))) for x in c)
 
 
-# ------------------------------------------------------------------ floor
 def _draw_flagstone(d, x, y, T, rng):
     v = rng.uniform(-1, 1) * 7
     tint = rng.uniform(-1, 1) * 3
     col = (int(th.FLOOR_BASE[0] + v + tint), int(th.FLOOR_BASE[1] + v), int(th.FLOOR_BASE[2] + v - tint))
     d.rectangle([x, y, x + T - 1, y + T - 1], fill=col)
-    if rng.random() < 0.35:                                   # split slab
+    if rng.random() < 0.35:
         if rng.random() < 0.5:
             s = x + int(T * rng.uniform(0.3, 0.7))
             d.line([s, y, s, y + T - 1], fill=th.FLOOR_MORTAR)
         else:
             s = y + int(T * rng.uniform(0.3, 0.7))
             d.line([x, s, x + T - 1, s], fill=th.FLOOR_MORTAR)
-    d.line([x, y, x + T - 1, y], fill=th.FLOOR_HILITE)        # bevel: lit top/left, dark bottom/right
+    d.line([x, y, x + T - 1, y], fill=th.FLOOR_HILITE)
     d.line([x, y, x, y + T - 1], fill=_jitter(th.FLOOR_HILITE, -10))
     d.line([x, y + T - 1, x + T - 1, y + T - 1], fill=th.FLOOR_MORTAR)
     d.line([x + T - 1, y, x + T - 1, y + T - 1], fill=th.FLOOR_MORTAR)
-    if T >= 16 and rng.random() < 0.3:                        # crack
+    if T >= 16 and rng.random() < 0.3:
         px, py = x + rng.uniform(0.1, 0.9) * T, y + rng.uniform(0.1, 0.9) * T
         for _ in range(int(rng.integers(2, 5))):
             nx = min(max(px + rng.uniform(-0.3, 0.3) * T, x + 2), x + T - 3)
             ny = min(max(py + rng.uniform(-0.3, 0.3) * T, y + 2), y + T - 3)
             d.line([px, py, nx, ny], fill=th.CRACK, width=max(1, T // 30))
             px, py = nx, ny
-    for _ in range(int(rng.integers(0, 4))):                  # pits and flecks
+    for _ in range(int(rng.integers(0, 4))):
         fx, fy = x + int(rng.integers(2, T - 2)), y + int(rng.integers(2, T - 2))
         d.point([fx, fy], fill=_jitter(col, rng.choice([-18, 14])))
 
 
 def _ambient_occlusion(size, rock, obstacles, T, Hh):
-    """Soft darkening near wall bases and under obstacles (blurred footprint mask)."""
     mask = Image.new("L", size, 0)
     d = ImageDraw.Draw(mask)
     off = int(0.1 * T)
@@ -93,21 +78,19 @@ def _build_floor(grid, rock, obstacles, exit_pos, props, rng, T, Hh):
     er, ec = exit_pos
     img.paste(props.exit_base(), (ec * T, Hh + er * T), props.exit_base())
     arr = np.asarray(img, np.float32)
-    arr += rng.normal(0, 2.2, (size[1], size[0], 1))                      # grain
+    arr += rng.normal(0, 2.2, (size[1], size[0], 1))
     stains = Image.fromarray(rng.integers(0, 255, (H * 2, W * 2), dtype=np.uint8))
     stains = np.asarray(stains.resize(size, Image.BICUBIC), np.float32)[..., None] / 255.0
-    arr *= 1.0 + (stains - 0.5) * 0.22                                    # low-frequency dirt
+    arr *= 1.0 + (stains - 0.5) * 0.22
     arr *= 1.0 - 0.62 * _ambient_occlusion(size, rock, obstacles, T, Hh)
     return arr
 
 
-# ------------------------------------------------------------------ walls
 def _draw_wall(d, x, T, Hh, up_rock, left_rock, right_rock, front_visible, rng):
-    """One wall block into a row strip (top face y in [0, T), front face below)."""
     j = rng.uniform(-1, 1) * 9
     top = _jitter(th.WALL_TOP, j)
     d.rectangle([x, 0, x + T - 1, T - 1], fill=top)
-    d.line([x, T - 1, x + T - 1, T - 1], fill=th.shade(top, 0.78))        # slab seams
+    d.line([x, T - 1, x + T - 1, T - 1], fill=th.shade(top, 0.78))
     d.line([x + T - 1, 0, x + T - 1, T - 1], fill=th.shade(top, 0.82))
     if rng.random() < 0.5:
         sx = x + int(T * rng.uniform(0.25, 0.75))
@@ -115,7 +98,7 @@ def _draw_wall(d, x, T, Hh, up_rock, left_rock, right_rock, front_visible, rng):
     if rng.random() < 0.35:
         sy = int(T * rng.uniform(0.3, 0.7))
         d.line([x + 1, sy, x + T - 2, sy], fill=th.shade(top, 0.9))
-    if not up_rock:                                           # lit far edge of the top face
+    if not up_rock:
         d.line([x, 0, x + T - 1, 0], fill=th.WALL_TOP_RIM, width=2)
     if not left_rock:
         d.line([x, 0, x, T - 1], fill=th.shade(top, 1.12))
@@ -127,7 +110,7 @@ def _draw_wall(d, x, T, Hh, up_rock, left_rock, right_rock, front_visible, rng):
     d.rectangle([x, y0, x + T - 1, y1 - 1], fill=th.WALL_FRONT)
     courses = 2 if Hh >= 14 else 1
     ch = Hh / courses
-    for i in range(courses):                                  # staggered brick courses
+    for i in range(courses):
         ya, yb = y0 + int(i * ch), y0 + int((i + 1) * ch)
         bw = max(6, T // 2)
         shift = (bw // 2) * ((i + int(x // T)) % 2)
@@ -141,8 +124,8 @@ def _draw_wall(d, x, T, Hh, up_rock, left_rock, right_rock, front_visible, rng):
                     d.line([xa, ya, xa, yb - 1], fill=th.MORTAR)
             bx += bw
     d.line([x, y0, x + T - 1, y0], fill=th.shade(th.WALL_TOP, 0.62), width=1)
-    d.line([x, y0 + 1, x + T - 1, y0 + 1], fill=th.shade(th.WALL_FRONT, 1.3))       # edge highlight
-    for k in range(max(2, Hh // 3)):                          # base shading toward the floor
+    d.line([x, y0 + 1, x + T - 1, y0 + 1], fill=th.shade(th.WALL_FRONT, 1.3))
+    for k in range(max(2, Hh // 3)):
         tone = th.mix(th.WALL_FRONT_DARK, th.WALL_FRONT, k / max(2, Hh // 3))
         d.line([x, y1 - 1 - k, x + T - 1, y1 - 1 - k], fill=tone)
     if not left_rock:
@@ -152,7 +135,6 @@ def _draw_wall(d, x, T, Hh, up_rock, left_rock, right_rock, front_visible, rng):
 
 
 def _pick_torches(candidates, rng):
-    """Greedy, spaced torch placement over wall tiles whose front face is visible."""
     chosen = []
     for i in rng.permutation(len(candidates)):
         r, c = candidates[i]
@@ -161,9 +143,7 @@ def _pick_torches(candidates, rng):
     return chosen
 
 
-# ---------------------------------------------------------------- lighting
 def light_multiplier(size, lights, strength=th.VIGNETTE_STRENGTH):
-    """(h, w, 3) float32 brightness multiplier: cool ambient + warm radial lights + vignette."""
     w, h = size
     lw, lh = w // LIGHT_RES + 2, h // LIGHT_RES + 2
     xs = (np.arange(lw) * LIGHT_RES)[None, :].astype(np.float32)
@@ -180,14 +160,13 @@ def light_multiplier(size, lights, strength=th.VIGNETTE_STRENGTH):
     return np.asarray(big, np.float32) / 100.0
 
 
-# ------------------------------------------------------------------- build
 def build_static_map(grid, obstacles, exit_pos, seed, T, Hh):
     H, W = grid.shape
     rng = np.random.default_rng(int(seed or 0) * 7919 + 17)
     obst = {tuple(o) for o in obstacles}
     rock = grid == 1
     for r, c in obst:
-        rock[r, c] = False                                    # obstacles stand on floor
+        rock[r, c] = False
     props = Props(T, Hh)
     size = (W * T, H * T + Hh)
 
@@ -201,7 +180,7 @@ def build_static_map(grid, obstacles, exit_pos, seed, T, Hh):
         for c in range(W):
             if rock[r, c]:
                 near = padded[r:r + 3, c:c + 3]
-                visible[r, c] = not near.all()                # buried rock stays void
+                visible[r, c] = not near.all()
     for r in range(H):
         has_wall = visible[r].any() or any((r, c) in obst for c in range(W))
         if not has_wall:
@@ -239,7 +218,7 @@ def build_static_map(grid, obstacles, exit_pos, seed, T, Hh):
         if strip is None:
             continue
         a = np.asarray(strip, np.float32)
-        a[..., :3] += rng.normal(0, 2.4, (T + Hh, W * T, 1))                  # stone grain
+        a[..., :3] += rng.normal(0, 2.4, (T + Hh, W * T, 1))
         a[..., :3] *= lm[r * T:r * T + T + Hh]
         strips[r] = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGBA")
         occ.alpha_composite(strips[r], (0, r * T))

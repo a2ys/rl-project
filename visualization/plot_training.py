@@ -1,7 +1,3 @@
-"""Training curves from a run directory.
-
-python -m visualization.plot_training experiments/hunter_vs_path_s0
-"""
 import argparse
 import csv
 from pathlib import Path

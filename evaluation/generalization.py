@@ -1,9 +1,3 @@
-"""Train / val / test win rates of one trained model (preliminary generalization check).
-
-python -m evaluation.generalization --role hunter --model experiments/hunter_vs_path_s0/model --opponent path
-
-Use the test split only for final reporting. Never tune on it.
-"""
 import argparse
 
 from agents.factory import make_agent

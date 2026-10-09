@@ -1,8 +1,3 @@
-"""Characters and small dynamic sprites (agents, key, flame, arrows, glows).
-
-Everything is drawn at SS x resolution once per tile size, outlined, then downscaled
-and cached, so per-frame work is just pasting.
-"""
 import math
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -11,12 +6,11 @@ from visualization import theme as th
 from visualization.gfx import SS, canvas, downscale, outlined, radial_glow
 
 FACINGS = {(1, 0): "down", (-1, 0): "up", (0, -1): "left", (0, 1): "right"}
-AGENT_W, AGENT_H, FOOT_Y = 1.2, 1.6, 1.5   # sprite box in tile units; feet y inside it
+AGENT_W, AGENT_H, FOOT_Y = 1.2, 1.6, 1.5
 ARROW_LEVELS = 4
 
 
 def facing_name(delta):
-    """Dominant axis of a (drow, dcol) movement -> 'down'/'up'/'left'/'right'."""
     dr, dc = delta
     if abs(dr) >= abs(dc):
         return "down" if dr >= 0 else "up"
@@ -24,8 +18,6 @@ def facing_name(delta):
 
 
 class Sprites:
-    """Lazy per-tile-size sprite cache."""
-
     def __init__(self, T):
         self.T = T
         self._cache = {}
@@ -35,7 +27,6 @@ class Sprites:
             self._cache[key] = builder(*args)
         return self._cache[key]
 
-    # ------------------------------------------------------------ agents
     def agent(self, role, facing):
         return self.get(("agent", role, facing), self._draw_agent, role, facing)
 
@@ -44,9 +35,9 @@ class Sprites:
         im, d = canvas(AGENT_W * T, AGENT_H * T)
         u = T * SS
 
-        k = 1.0 if role == "hunter" else 1.14           # evader is lighter but not tiny
+        k = 1.0 if role == "hunter" else 1.14
 
-        def P(x, y):                                  # tile units, origin at the feet
+        def P(x, y):
             return (x * k + AGENT_W / 2) * u, (y * k + FOOT_Y) * u
 
         side = facing in ("left", "right")
@@ -65,23 +56,22 @@ class Sprites:
         boots = (44, 36, 40)
         for lx in ((-0.09, 0.12) if side else (-0.17, 0.17)):
             d.rounded_rectangle([*P(lx - 0.09, -0.17), *P(lx + 0.09, 0.0)], 8, fill=boots)
-        hw, hem = (0.25, 0.26) if side else (0.42, 0.35)   # body half-widths
+        hw, hem = (0.25, 0.26) if side else (0.42, 0.35)
         body = [P(-hw, -0.70), P(hw, -0.70), P(hem, -0.10), P(-hem, -0.10)]
         d.polygon(body, fill=cloak)
         d.polygon([P(-hem, -0.24), P(hem, -0.24), P(hem * 0.97, -0.10), P(-hem * 0.97, -0.10)],
                   fill=dark)
         d.polygon([P(-hw, -0.70), P(-hw * 0.35, -0.70), P(-hem * 0.5, -0.10), P(-hem, -0.10)],
-                  fill=th.shade(cloak, 1.18))                      # rim light, left side
+                  fill=th.shade(cloak, 1.18))
         if facing == "down":
             d.polygon([P(-0.17, -0.66), P(0.17, -0.66), P(0.13, -0.36), P(-0.13, -0.36)],
-                      fill=steel_dark)                              # chest plate
-        d.rectangle([*P(-hem, -0.34), *P(hem, -0.28)], fill=(52, 36, 36))   # belt
-        unit = P(1, 0)[0] - P(0, 0)[0]                               # one tile in pixels
+                      fill=steel_dark)
+        d.rectangle([*P(-hem, -0.34), *P(hem, -0.28)], fill=(52, 36, 36))
+        unit = P(1, 0)[0] - P(0, 0)[0]
         if not side:
-            for sx in (-1, 1):                                       # pauldrons
+            for sx in (-1, 1):
                 cx, cy = P(sx * 0.42, -0.66)
                 d.ellipse([cx - 0.15 * unit, cy - 0.15 * unit, cx + 0.15 * unit, cy + 0.15 * unit], fill=steel)
-        # horned helmet (side views show a single horn)
         r = 0.2 * unit
         hx, hy = P(0.0, -0.86)
         hx += s * r * 0.15 if side else 0
@@ -94,12 +84,11 @@ class Sprites:
             d.polygon(horn, fill=th.BONE)
         d.ellipse([hx - r, hy - r, hx + r, hy + r], fill=steel_dark)
         d.pieslice([hx - r, hy - r, hx + r, hy + r], 180, 360, fill=steel)
-        if facing != "up":                                           # glowing eye slits
+        if facing != "up":
             for ex in ((-0.07, 0.07) if not side else (0.09 * s,)):
                 x, y = P(ex, -0.86)
                 x += s * r * 0.15 if side else 0
                 d.rounded_rectangle([x - r * 0.2, y - r * 0.09, x + r * 0.2, y + r * 0.14], 4, fill=(255, 168, 70))
-        # axe held at the side (in front when seen from the side)
         ax = 0.46 * s
         d.line([*P(ax, -0.28), *P(ax + 0.02 * s, -0.98)], fill=th.WOOD_DARK, width=int(0.05 * unit))
         blade_dx = 0.2 * (s if side else 1)
@@ -119,15 +108,14 @@ class Sprites:
         d.polygon([P(-w * 0.9, -0.2), P(w * 0.9, -0.2), P(w, -0.06), P(-w, -0.06)], fill=dark)
         d.polygon([P(-0.2, -0.72), P(-0.05, -0.72), P(-0.1, -0.06), P(-w, -0.06)], fill=light)
         if facing == "up":
-            d.line([*P(0, -0.7), *P(0, -0.1)], fill=dark, width=SS * 2)   # cloak seam
-        # pointed hood
+            d.line([*P(0, -0.7), *P(0, -0.1)], fill=dark, width=SS * 2)
         shift = 0.08 * s if side else 0.0
         hood = [P(-0.22 + shift, -0.7), P(-0.2 + shift, -0.98), P(0.02 + shift * 1.5, -1.2),
                 P(0.2 + shift, -0.98), P(0.22 + shift, -0.7)]
         d.polygon(hood, fill=th.shade(cloak, 0.92))
         d.polygon([P(-0.2 + shift, -0.98), P(0.02 + shift * 1.5, -1.2), P(-0.04 + shift, -0.9)],
                   fill=light)
-        if facing != "up":                                            # face opening + eyes
+        if facing != "up":
             fx = shift * 1.9
             x0, y0 = P(fx - 0.12, -1.0)
             x1, y1 = P(fx + 0.12, -0.78)
@@ -137,9 +125,8 @@ class Sprites:
                 rr = 0.032 * (P(1, 0)[0] - P(0, 0)[0])
                 d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=(210, 245, 255))
         d.polygon([P(-0.22, -0.72), P(0.22, -0.72), P(0.2, -0.62), P(-0.2, -0.62)],
-                  fill=(238, 214, 168))                                # scarf
+                  fill=(238, 214, 168))
 
-    # ------------------------------------------------------------- items
     def key(self, size=1.0):
         return self.get(("key", size), self._draw_key, size)
 
@@ -172,7 +159,6 @@ class Sprites:
         return im.filter(ImageFilter.GaussianBlur(max(1, T * 0.05)))
 
     def glow(self, color, radius, intensity):
-        """Cached additive glow image (see gfx.add_light)."""
         key = ("glow", color, int(radius), round(intensity, 2))
         return self.get(key, radial_glow, radius, color, intensity)
 
@@ -229,12 +215,11 @@ class Sprites:
         im, d = canvas(n, n)
         u = n * SS
         d.ellipse([0.02 * u, 0.02 * u, 0.98 * u, 0.98 * u], fill=(*th.HUNTER, 34))
-        for a in range(0, 360, 18):                       # dashed outline
+        for a in range(0, 360, 18):
             d.arc([0.02 * u, 0.02 * u, 0.98 * u, 0.98 * u], a, a + 9, fill=(*th.HUNTER, 170),
                   width=max(2, int(0.006 * u * 3)))
         return downscale(im, n, n)
 
 
 def hop(frac):
-    """Vertical hop (tile units) while an agent crosses between two tiles."""
     return 0.10 * abs(math.sin(math.pi * frac))

@@ -2,15 +2,16 @@
   "args": {
     "role": "hunter",
     "opponent": "random",
-    "steps": 600000,
+    "steps": 300000,
     "n_envs": 8,
     "seed": 0,
     "eval_freq": 25000,
     "n_eval_maps": 50,
     "n_doors": 1,
     "shaping": 0.01,
+    "ent_coef": 0.01,
     "subproc": false,
-    "out": "experiments/hunter_vs_random_s0"
+    "out": null
   },
   "env": {
     "size": 21,

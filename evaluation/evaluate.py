@@ -1,9 +1,3 @@
-"""Evaluate matchups on a map split.
-
-python -m evaluation.evaluate --n-maps 100
-python -m evaluation.evaluate --hunter-model experiments/hunter_vs_path_s0/model \
-                              --evader-model experiments/evader_vs_chase_s0/model
-"""
 import argparse
 import csv
 from pathlib import Path

@@ -63,7 +63,6 @@ def test_timeout():
 
 
 def test_path_evader_solves_keys_and_doors():
-    """Hunter parked inside a wall; evader must fetch the key, open the door, exit."""
     env = DungeonPursuitEnv(EnvConfig(max_steps=300))
     ev = PathEvader(flee_radius=0)
     for s in range(30):
@@ -114,17 +113,17 @@ def test_capture_radius():
 def test_hunter_sprint_moves_twice():
     env = DungeonPursuitEnv(EnvConfig(hunter_sprint_every=2))
     env.reset(seed=1)
-    env.pos[EVADER] = (0, 0)   # out of the way
+    env.pos[EVADER] = (0, 0)
     start = env.pos[HUNTER]
-    for a in range(4):          # find a direction with two free tiles
+    for a in range(4):
         r, c = start
         dr, dc = ((-1, 0), (1, 0), (0, -1), (0, 1))[a]
         if env.grid[r + dr, c + dc] == 0 and env.grid[r + 2 * dr, c + 2 * dc] == 0:
             break
     else:
         pytest.skip("no straight corridor at spawn")
-    env.step({HUNTER: STAY, EVADER: STAY})            # t=1: normal step
-    env.step({HUNTER: a, EVADER: STAY})               # t=2: sprint -> two tiles
+    env.step({HUNTER: STAY, EVADER: STAY})
+    env.step({HUNTER: a, EVADER: STAY})
     assert env.pos[HUNTER] == (start[0] + 2 * dr, start[1] + 2 * dc)
 
 
@@ -132,4 +131,4 @@ def test_hunter_spawns_near_exit():
     from env.generator import _bfs
     near = sum(_bfs((d := generate_dungeon(s, hunter_exit_dist=6)).grid, d.exit_pos, False)
                [d.hunter_start] <= 6 for s in range(100))
-    assert near >= 80   # the rest are relaxed fallbacks (no tile in the band near the exit)
+    assert near >= 80

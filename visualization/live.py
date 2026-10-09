@@ -1,18 +1,3 @@
-"""Live 2.5D viewer window (tkinter + Pillow). Plays episodes in real time.
-
-python -m visualization.live --hunter chase --evader path --seed 42
-python -m visualization.live --hunter chase --evader ppo:experiments/evader_vs_chase_s0/model
-
-For PPO agents the panel shows the policy's action probabilities live (U/D/L/R/S,
-also drawn as arrows around the agent) and H shows a value heatmap V(s).
-
-Keys: SPACE pause | N/P next/prev map | R restart | S step (paused) | +/- speed
-      V vision cones | T trails | H value heatmap (off/evader/hunter) | L legend
-      C screenshot | Q quit
-
-The window is resizable: tile size is recomputed from the canvas area (debounced) and the
-static map layer is re-cached; per frame only dynamic sprites are composited.
-"""
 import argparse
 import time
 import tkinter as tk
@@ -35,7 +20,6 @@ FRAME_BUDGET_MS = 16
 
 
 def action_probs(agent, env, role):
-    """Policy action distribution for a PPO agent, else None."""
     model = getattr(agent, "model", None)
     if model is None:
         return None
@@ -46,7 +30,6 @@ def action_probs(agent, env, role):
 
 
 def value_heatmap(agent, env, role):
-    """V(s) of the PPO policy with `role` standing on every walkable tile."""
     import torch
     model = agent.model
     heat = np.full((env.H, env.W), np.nan)
@@ -69,7 +52,6 @@ def hex_color(c):
 
 
 def make_background(w, h):
-    """Dark backdrop with a soft vignette and faint grain."""
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
     r = np.sqrt(((xs / w - 0.5) * 2) ** 2 + ((ys / h - 0.5) * 2) ** 2) / 1.414
     base = np.array(th.UI_BG, np.float32) * (1.25 - 0.9 * r ** 1.5)[..., None]
@@ -88,14 +70,14 @@ class Viewer:
         self.r = PrettyRenderer(tile)
         self.seed, self.sps = seed, float(sps)
         self.paused, self.show_vision, self.show_trails, self.show_legend = False, True, True, True
-        self.heat_mode = 0                       # 0 off, then each PPO role in turn
+        self.heat_mode = 0
         self.heat, self.heat_t = None, -99
         self.stats = dict(n=0, caught=0, escaped=0, timeout=0)
         self.canvas = tk.Canvas(root, bd=0, highlightthickness=0, bg=hex_color(th.UI_BG))
         self.canvas.pack(fill="both", expand=True)
         self.backdrop_item = self.canvas.create_image(0, 0, anchor="nw")
         self.map_item = self.canvas.create_image(0, 0, anchor="nw")
-        self.photos = {}                         # Tk images: static backdrop and the per-frame map
+        self.photos = {}
         self.layout, self._resize_job, self.frame_ms = None, None, 0.0
         self._hud_cache, self._legend_pos = {}, None
         self.canvas.bind("<Configure>", self.on_configure)
@@ -115,30 +97,26 @@ class Viewer:
         self.relayout(*size)
         self.tick()
 
-    # ----------------------------------------------------------- layout
     def initial_size(self, tile):
-        """Window size that fits the map at roughly `tile` pixels per cell."""
         return int((self.env.W + 0.5) * tile + 420), int((self.env.H + 0.5) * tile + 130)
 
     def on_configure(self, event):
-        """Debounced resize: relayout only after the user stops dragging."""
         if self._resize_job:
             self.root.after_cancel(self._resize_job)
         self._resize_job = self.root.after(self.RESIZE_DEBOUNCE_MS, self.relayout, event.width, event.height)
 
     def relayout(self, cw, ch):
-        """Recompute tile size and screen regions for a canvas of cw x ch pixels."""
         self._resize_job = None
         cw, ch = max(cw, 640), max(ch, 480)
         ui = max(0.75, min(1.7, ch / 900))
         margin, gap = int(14 * ui), int(18 * ui)
         panel_w = int(min(360 * ui, cw * 0.36))
-        footer_h = int((34 + 26 + 6) * ui) + 2 * margin            # key strip + status chips
-        area = (margin, margin, cw - margin, ch - footer_h)         # region left for map + info panel
+        footer_h = int((34 + 26 + 6) * ui) + 2 * margin
+        area = (margin, margin, cw - margin, ch - footer_h)
         T = tile_for_area(area[2] - area[0] - panel_w - gap, area[3] - area[1], self.env.H, self.env.W)
         self.r.set_tile(T)
         mw, mh = self.r.map_size(self.env.H, self.env.W)
-        group_x = (cw - (mw + gap + panel_w)) // 2                  # map and panel are centred as one group
+        group_x = (cw - (mw + gap + panel_w)) // 2
         map_xy = (max(margin, group_x), area[1] + (area[3] - area[1] - mh) // 2)
         pad, self._layout_id = int(4 * ui), getattr(self, "_layout_id", 0) + 1
         self.layout = dict(
@@ -153,7 +131,6 @@ class Viewer:
         self.photos = {}
         self.canvas.coords(self.map_item, *map_xy)
 
-    # ----------------------------------------------------------- state
     def load(self, seed):
         self.seed = seed
         self.env.reset(seed=seed)
@@ -167,7 +144,6 @@ class Viewer:
         self.refresh_derived()
 
     def refresh_derived(self):
-        """Everything that only changes when the environment steps."""
         env = self.env
         self.probs = {k: action_probs(self.agents[k], env, k) for k in ROLES}
         self.vision = None
@@ -200,7 +176,6 @@ class Viewer:
             self.stats[info["outcome"]] += 1
         self.refresh_derived()
 
-    # -------------------------------------------------------- controls
     def toggle(self):
         self.paused = not self.paused
 
@@ -231,9 +206,7 @@ class Viewer:
         self.frame().save(out)
         print("saved", out)
 
-    # ----------------------------------------------------------- frame
     def cached(self, name, key, build):
-        """HUD pieces change per step, not per frame: rebuild only when their key changes."""
         hit = self._hud_cache.get(name)
         if hit is None or hit[0] != key:
             hit = (key, build())
@@ -248,14 +221,12 @@ class Viewer:
         return s
 
     def interpolated_positions(self, now):
-        """Positions between the previous and current tile (smoothstep eased)."""
         a = 1.0 if (self.paused or self.done) else min(1.0, (now - self.last_step) * self.sps)
         a = a * a * (3 - 2 * a)
         return {k: (self.prev[k][0] + (self.env.pos[k][0] - self.prev[k][0]) * a,
                     self.prev[k][1] + (self.env.pos[k][1] - self.prev[k][1]) * a) for k in ROLES}
 
     def legend(self):
-        """(image, position, inside_map) of the legend, or None when hidden."""
         if not self.show_legend:
             return None
         L, capture = self.layout, getattr(self.env.cfg, "capture_radius", 0)
@@ -269,7 +240,6 @@ class Viewer:
         return img, pos, inside
 
     def backdrop(self, state):
-        """Everything except the map: rebuilt (and re-uploaded to Tk) only when HUD content changes."""
         L, ui = self.layout, self.layout["ui"]
         cw, ch = L["size"]
         m, strip_w = L["margin"], cw - 2 * L["margin"]
@@ -292,7 +262,6 @@ class Viewer:
         return self.cached("backdrop", key, build)
 
     def parts(self):
-        """(backdrop, map image): the map image carries the legend when it overlaps the map."""
         now = time.perf_counter()
         pos = self.interpolated_positions(now)
         capture = getattr(self.env.cfg, "capture_radius", 0)
@@ -309,14 +278,12 @@ class Viewer:
         return backdrop, map_img
 
     def frame(self):
-        """Complete window image (used for screenshots and tests)."""
         backdrop, map_img = self.parts()
         out = backdrop.copy()
         out.paste(map_img, self.layout["map_xy"])
         return out
 
     def legend_position(self, size):
-        """Left of the map when the window has room, else the map corner hiding the fewest tiles."""
         L = self.layout
         key = (self.seed, L["map_xy"], self.r.T, size)
         if self._legend_pos is not None and self._legend_pos[0] == key:
@@ -329,7 +296,7 @@ class Viewer:
             T, Hh = self.r.T, self.r.Hh
             solid = self.env.grid == WALL
             padded = np.pad(solid, 1, constant_values=True)
-            shown = np.zeros_like(solid)                   # tiles actually drawn (not buried rock)
+            shown = np.zeros_like(solid)
             for dr in range(3):
                 for dc in range(3):
                     shown |= ~padded[dr:dr + solid.shape[0], dc:dc + solid.shape[1]]
@@ -347,13 +314,12 @@ class Viewer:
         return pos
 
     def upload(self, name, item, img, always=False):
-        """Send an image to Tk; static images only when they changed, the map every frame."""
         photo, last = self.photos.get(name, (None, None))
         if photo is None or photo.width() != img.width or photo.height() != img.height:
             photo = ImageTk.PhotoImage(img)
             self.canvas.itemconfigure(item, image=photo)
         elif always or last is not img:
-            photo.paste(img)                           # reuse the Tk image: no per-frame allocation
+            photo.paste(img)
         self.photos[name] = (photo, img)
 
     def tick(self):

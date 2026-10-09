@@ -1,7 +1,3 @@
-"""Pillow renderer (no GUI needed).
-
-Gallery of maps:  python -m visualization.renderer --seeds 42 71 103 912 7 8 --out experiments/gallery.png
-"""
 import argparse
 from pathlib import Path
 

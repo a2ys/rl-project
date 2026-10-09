@@ -1,15 +1,3 @@
-"""2.5D dungeon renderer (Pillow + numpy only).
-
-Layers, from slowest-changing to fastest:
-  static map  floor + walls + props + baked lighting, cached per (map, tile size)
-  scene       static map + vision / heat / trail overlays, cached per environment step
-  frame       scene + glows, doors, keys, agents, probability arrows, drawn every frame
-
-Moving things are depth sorted against the cached wall strips: after a sprite is pasted,
-every strip (and door) in a row below it is pasted again over the sprite's bounding box.
-
-Used by visualization.live (real time) and visualization.play / renderer (files).
-"""
 import math
 
 import numpy as np
@@ -21,12 +9,11 @@ from visualization.props import Props
 from visualization.sprites import ARROW_LEVELS, FOOT_Y, Sprites, facing_name, hop
 from visualization.tiles import build_static_map
 
-WALL_HEIGHT = 0.55          # wall block height in tiles
+WALL_HEIGHT = 0.55
 FLAME_LEVELS = 4
 
 
 def tile_for_area(width, height, rows, cols):
-    """Largest tile size such that a rows x cols map (plus wall height) fits width x height."""
     return max(8, int(min(width / cols, height / (rows + WALL_HEIGHT))))
 
 
@@ -51,7 +38,6 @@ class PrettyRenderer:
     def map_size(self, rows, cols):
         return cols * self.T, rows * self.T + self.Hh
 
-    # ------------------------------------------------------------- caching
     def _ensure_static(self, snap):
         grid = snap["grid"]
         obstacles = tuple(sorted(map(tuple, snap.get("obstacles", []))))
@@ -78,7 +64,7 @@ class PrettyRenderer:
             size = (W * T, H * T)
             scene.paste(Image.fromarray(small).resize(size, Image.NEAREST), (0, Hh),
                         Image.fromarray(alpha).resize(size, Image.NEAREST))
-        for role, cells in (vision or {}).items():            # soft view cone: bilinear-upsampled tile mask
+        for role, cells in (vision or {}).items():
             m = np.zeros((H, W), np.uint8)
             for r, c in cells:
                 m[r, c] = 38
@@ -94,9 +80,7 @@ class PrettyRenderer:
         scene.paste(self._static.occ, (0, 0), self._static.occ)
         return scene
 
-    # ----------------------------------------------------------- occlusion
     def _reocclude(self, frame, box, depth, door_list):
-        """Paste wall strips / doors from rows below `depth` back over `box`."""
         T, Hh = self.T, self.Hh
         x0, y0 = max(0, int(box[0])), max(0, int(box[1]))
         x1, y1 = min(frame.width, int(box[2])), min(frame.height, int(box[3]))
@@ -118,10 +102,8 @@ class PrettyRenderer:
                     part = spr.crop((max(x0, dx) - dx, ya - top, min(x1, dx + T) - dx, yb - top))
                     frame.paste(part, (max(x0, dx), ya), part)
 
-    # -------------------------------------------------------------- render
     def render_map(self, snap, hp=None, ep=None, anim=0.0, trails=None, vision=None, heat=None,
                    probs=None, capture_radius=0):
-        """Draw the dungeon at the current tile size and return an RGB image."""
         T, Hh = self.T, self.Hh
         self._ensure_static(snap)
         grid = snap["grid"]
@@ -139,7 +121,6 @@ class PrettyRenderer:
         def center(p):
             return (p[1] + 0.5) * T, Hh + (p[0] + 0.5) * T
 
-        # --- lights and flames
         st = self._static
         for i, (fx, fy, lx, ly) in enumerate(st.torches):
             lvl = int(2 + 2 * math.sin(anim * 9 + i * 2.3) * math.sin(anim * 5.1 + i)) % FLAME_LEVELS
@@ -152,7 +133,6 @@ class PrettyRenderer:
         add_light(frame, self.sprites.glow(th.EXIT_GREEN, 0.7 * T, 0.5 + 0.1 * pulse), ex, ey - 0.45 * T)
         self._motes(frame, ex, ey, anim)
 
-        # --- doors act as wall blocks: drawn first, re-pasted over agents behind them
         doors = set(map(tuple, snap["doors"]))
         door_list = []
         for r, c in sorted(self._known_doors):
@@ -160,7 +140,6 @@ class PrettyRenderer:
             door_list.append((r, c * T, spr))
             frame.paste(spr, (c * T, r * T), spr)
 
-        # --- shadows, glows, capture radius
         for role, p in pos.items():
             cx, cy = center(p)
             sh = self.sprites.shadow()
@@ -171,7 +150,6 @@ class PrettyRenderer:
             cx, cy = center(pos["hunter"])
             frame.paste(ring, (int(cx - ring.width / 2), int(cy - ring.height / 2)), ring)
 
-        # --- depth sorted sprites
         items = []
         for k in snap["keys"]:
             items.append((k[0], "key", k))
@@ -191,7 +169,6 @@ class PrettyRenderer:
             self._banner(frame, outcome)
         return frame
 
-    # ------------------------------------------------------- sprite drawing
     def _draw_key(self, frame, c, anim, rc):
         T = self.T
         bob = 0.07 * T * math.sin(anim * 3 + rc[0] + rc[1])
@@ -242,7 +219,6 @@ class PrettyRenderer:
             frame.paste(ring, (int(cx - ring.width / 2), int(cy - ring.height / 2)), ring)
 
     def _motes(self, frame, ex, ey, anim):
-        """Small rising sparks above the exit stairway."""
         T = self.T
         d = ImageDraw.Draw(frame)
         for i in range(5):
@@ -272,11 +248,9 @@ class PrettyRenderer:
         y = (frame.height - band.height) // 2
         frame.paste(band, (0, y), band)
 
-    # ------------------------------------------------------ file output API
     def render(self, snap, hp=None, ep=None, anim=0.0, trails=None, vision=None, heat=None,
                probs=None, stats=None, hspec="", espec="", footer=(), panel=True,
                capture_radius=0, info=None):
-        """Map image, plus a HUD side panel when `panel` is true (GIF / PNG output)."""
         img = self.render_map(snap, hp, ep, anim, trails, vision, heat, probs, capture_radius)
         if not panel:
             return img

@@ -1,9 +1,3 @@
-"""Record an episode as a smooth GIF (same 2.5D look as the live viewer).
-
-python -m visualization.play --hunter chase --evader path --seed 42
-python -m visualization.play --hunter random --evader random --seed 42 --out experiments/before.gif
-python -m visualization.play --hunter chase --evader ppo:experiments/evader_vs_chase_s0/model --seed 42 --out experiments/after.gif
-"""
 import argparse
 from collections import deque
 from pathlib import Path
@@ -63,7 +57,7 @@ def main():
         probs = {k: action_probs(agents[k], env, k) for k in ROLES}
         if term or trunc:
             break
-    frames += [frames[-1]] * (a.fps * 2)          # hold last frame ~2s
+    frames += [frames[-1]] * (a.fps * 2)
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     frames[0].save(a.out, save_all=True, append_images=frames[1:],

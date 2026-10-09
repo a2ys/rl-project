@@ -2,7 +2,7 @@
   "role": "hunter",
   "opponent": "path",
   "steps": 300000,
-  "minutes": 8.53,
+  "minutes": 10.52,
   "train_maps_win": 0.3,
   "val_maps_win": 0.42,
   "train_stats": {

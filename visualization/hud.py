@@ -1,5 +1,3 @@
-"""Heads-up display: info cards, legend, key strip. Each function returns an RGBA image
-that the caller caches until its inputs change (HUD content only changes per step)."""
 import dataclasses
 from dataclasses import dataclass, field
 
@@ -26,7 +24,6 @@ def seed_split(seed):
 
 
 def rules_from_config(cfg):
-    """Human-readable (label, value) rules from any EnvConfig, skipping reward tuning fields."""
     rules = []
     for f in dataclasses.fields(cfg):
         if any(w in f.name for w in HIDDEN_RULE_WORDS):
@@ -51,8 +48,8 @@ class HudState:
     keys_on_map: int = 0
     doors_left: int = 0
     doors_total: int = 0
-    dist_hunter: int = None        # path distance hunter -> evader (-1 unreachable)
-    dist_evader: int = None        # path distance evader -> its objective
+    dist_hunter: int = None
+    dist_evader: int = None
     goal: str = "exit"
     sees: dict = field(default_factory=dict)
     sps: float = None
@@ -78,7 +75,6 @@ class HudState:
 
 
 def env_info(env):
-    """Live situation fields for HudState, read from a DungeonPursuitEnv (path distances, sight)."""
     hr, er = env.pos["hunter"], env.pos["evader"]
     targets = env.objective_targets()
     return dict(
@@ -89,7 +85,6 @@ def env_info(env):
         doors_total=len(env.dungeon.doors), rules=rules_from_config(env.cfg))
 
 
-# ------------------------------------------------------------------ helpers
 def _px(v, ui):
     return max(1, int(round(v * ui)))
 
@@ -103,7 +98,6 @@ def _card(w, h, ui):
 
 
 def _chip(img, x, y, label, color, ui, size=11):
-    """Small rounded tag; returns its width."""
     f = th.font(_px(size, ui), "bold")
     tw = int(f.getlength(label))
     w, h = tw + _px(14, ui), _px(size + 9, ui)
@@ -125,7 +119,6 @@ def _dot(d, x, y, r, color):
     d.ellipse([x - r, y - r, x + r, y + r], fill=color)
 
 
-# -------------------------------------------------------------------- cards
 def title_card(w, s, ui):
     h = _px(112, ui)
     img = _card(w, h, ui)
@@ -142,7 +135,6 @@ def title_card(w, s, ui):
 
 
 def status_headline(s):
-    """(text, colour) of the single most relevant line about the current situation."""
     if s.outcome in th.OUTCOME_STYLE:
         title, color, sub = th.OUTCOME_STYLE[s.outcome]
         return f"{title.title()} · {sub}", color
@@ -270,7 +262,6 @@ def rules_card(w, rules, ui):
 
 
 def render_side_panel(width, height, s, ui):
-    """Stack of info cards; the rules card is dropped first when the window is short."""
     w = width - _px(24, ui)
     gap = _px(10, ui)
     cards = [title_card(w, s, ui), status_card(w, s, ui),
@@ -290,9 +281,7 @@ def render_side_panel(width, height, s, ui):
     return out
 
 
-# ------------------------------------------------------------ status line
 def status_strip(width, s, ui):
-    """Playback state chips shown above the key strip."""
     h = _px(26, ui)
     img = Image.new("RGBA", (width, h), (0, 0, 0, 0))
     x = 0
@@ -305,7 +294,6 @@ def status_strip(width, s, ui):
 
 
 def key_strip(width, flags, ui):
-    """Rounded translucent strip of keycaps; `flags` maps toggle names to on/off."""
     f_key, f_lab = th.font(_px(11, ui), "bold"), th.font(_px(11, ui))
     pad, gap = _px(14, ui), _px(14, ui)
     h = _px(34, ui)
@@ -325,9 +313,7 @@ def key_strip(width, flags, ui):
     return img
 
 
-# ------------------------------------------------------------------ legend
 def legend_panel(ui, show_vision=True, show_trails=True, show_heat=False, capture=0):
-    """Small translucent panel: icon + label per map element."""
     icon = _px(38, ui)
     tile = _px(21, ui)
     sprites, props = Sprites(tile), Props(tile, int(tile * 0.46))

@@ -1,5 +1,3 @@
-"""Single-agent Gymnasium view of the two-player env: the opponent is a scripted
-(or frozen) agent from agents.*, so SB3 can train one role at a time."""
 import gymnasium as gym
 import numpy as np
 

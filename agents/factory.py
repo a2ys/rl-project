@@ -2,7 +2,6 @@ from agents.scripted import ChaseHunter, IdleAgent, PathEvader, RandomAgent
 
 
 def make_agent(spec: str):
-    """random | idle | chase | chase_oracle | path | ppo:<model path> | pposample:<model path>"""
     spec = spec.strip()
     if spec == "random":
         return RandomAgent()

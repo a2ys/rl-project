@@ -1,5 +1,3 @@
-"""Scripted baseline agents. They get the env object (privileged access) but
-the Hunter/Evader only *react* to the opponent when it is in line of sight."""
 from env.dungeon_env import EVADER, HUNTER, STAY
 
 
@@ -22,9 +20,6 @@ class IdleAgent(Agent):
 
 
 class ChaseHunter(Agent):
-    """Chases the Evader when visible, otherwise walks to random tiles (patrol).
-    oracle=True -> always knows where the Evader is (upper-bound opponent)."""
-
     def __init__(self, oracle=False):
         self.oracle = oracle
         self.target = None
@@ -42,9 +37,6 @@ class ChaseHunter(Agent):
 
 
 class PathEvader(Agent):
-    """Shortest path to key (if a door blocks the way) then exit; steps away
-    from the Hunter when it is visible and within flee_radius."""
-
     def __init__(self, flee_radius=2):
         self.flee_radius = flee_radius
 

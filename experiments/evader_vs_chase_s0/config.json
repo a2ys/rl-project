@@ -9,6 +9,7 @@
     "n_eval_maps": 50,
     "n_doors": 1,
     "shaping": 0.01,
+    "ent_coef": 0.01,
     "subproc": false,
     "out": null
   },

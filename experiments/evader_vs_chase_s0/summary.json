@@ -2,7 +2,7 @@
   "role": "evader",
   "opponent": "chase",
   "steps": 600000,
-  "minutes": 13.6,
+  "minutes": 16.92,
   "train_maps_win": 0.38,
   "val_maps_win": 0.48,
   "train_stats": {

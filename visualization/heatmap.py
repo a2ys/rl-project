@@ -1,9 +1,3 @@
-"""Visitation heatmap of both agents on one map over many episodes.
-Use a stochastic agent (random or pposample:) otherwise every episode is identical.
-
-python -m visualization.heatmap --hunter random --evader random --seed 42 --episodes 200
-python -m visualization.heatmap --hunter pposample:experiments/hunter_vs_path_s0/model --evader path
-"""
 import argparse
 from pathlib import Path
 
@@ -33,7 +27,7 @@ def main():
         if ep == 0:
             env.reset(seed=a.seed)
         else:
-            env.reset(options={"map_seed": a.seed})   # keep rng stream running
+            env.reset(options={"map_seed": a.seed})
         hunter.reset()
         evader.reset()
         while True:

@@ -1,9 +1,3 @@
-"""Train a PPO baseline for one role against a scripted opponent.
-
-python -m training.train --role hunter --steps 300000      # vs scripted 'path' Evader
-python -m training.train --role evader --steps 300000      # vs scripted 'chase' Hunter
-python -m training.train --role hunter --steps 20000 --eval-freq 10000   # smoke test
-"""
 import argparse
 import csv
 import json

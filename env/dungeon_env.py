@@ -1,14 +1,3 @@
-"""Dungeon Pursuit: two-player (Hunter vs Evader) simultaneous-move environment.
-
-Multi-agent dict API:
-    obs, info = env.reset(seed=42)                  # obs[role] -> float32 (496,)
-    obs, rew, term, trunc, info = env.step({HUNTER: a, EVADER: b})
-Use env.wrappers.SingleAgentEnv for a standard single-agent Gymnasium env.
-
-reset(seed=s): reseeds the env RNG and plays dungeon s.
-reset(options={"map_seed": s}): plays dungeon s but keeps the RNG stream running.
-reset() : picks a dungeon from `seeds` using the RNG.
-"""
 from __future__ import annotations
 
 from collections import deque
@@ -24,7 +13,7 @@ HUNTER, EVADER = "hunter", "evader"
 UP, DOWN, LEFT, RIGHT, STAY = range(5)
 MOVES = ((-1, 0), (1, 0), (0, -1), (0, 1), (0, 0))
 
-N_CHANNELS = 6   # wall, door, key, exit, other agent, visible
+N_CHANNELS = 6
 N_SCALARS = 10
 
 
@@ -34,18 +23,18 @@ class EnvConfig:
     n_rooms: int = 5
     n_doors: int = 1
     max_steps: int = 200
-    view_radius: int = 4              # 9x9 window
-    hunter_opens_doors: bool = True   # Hunter walks through doors without a key
+    view_radius: int = 4
+    hunter_opens_doors: bool = True
     win_reward: float = 1.0
     step_penalty: float = 0.01
-    obstacle_density: float = 0.2     # pillars/crates inside rooms (block movement + sight)
-    shaping: float = 0.01             # per tile of path-distance progress
+    obstacle_density: float = 0.2
+    shaping: float = 0.01
     key_bonus: float = 0.1
     door_bonus: float = 0.1
-    hunter_sprint_every: int = 40     # Hunter repeats its move on every 40th step (bonus move; 0 = off)
-    capture_radius: int = 0           # caught if Manhattan distance <= r after the move (0 = same cell; also with swap rule)
-    hunter_min_dist: int = 8          # Hunter spawns at least this many path tiles from the Evader
-    hunter_exit_dist: int | None = 6  # Hunter spawns within this path distance of the exit (None = anywhere far)
+    hunter_sprint_every: int = 40
+    capture_radius: int = 0
+    hunter_min_dist: int = 8
+    hunter_exit_dist: int | None = 6
 
 
 @lru_cache(maxsize=4096)
@@ -71,7 +60,6 @@ class DungeonPursuitEnv:
         self.dungeon = None
         self.t = 0
 
-    # ------------------------------------------------------------------ reset
     def reset(self, seed=None, options=None):
         map_seed = None
         if seed is not None:
@@ -96,9 +84,7 @@ class DungeonPursuitEnv:
         self._cache = {}
         return self._obs_all(), {"map_seed": map_seed}
 
-    # ----------------------------------------------------------- path helpers
     def dist_field(self, targets, can_open_doors):
-        """Multi-source BFS path distance to the nearest target; -1 = unreachable."""
         key = (frozenset(targets), bool(can_open_doors))
         f = self._cache.get(key)
         if f is not None:
@@ -144,7 +130,6 @@ class DungeonPursuitEnv:
         return STAY
 
     def objective_targets(self):
-        """Evader goal: the key if a closed door blocks the exit, else the exit."""
         if self.keys_held == 0 and self.keys and self.doors:
             f = self.dist_field({self.exit_pos}, False)
             r, c = self.pos[EVADER]
@@ -157,9 +142,7 @@ class DungeonPursuitEnv:
         r, c = tiles[int(self.rng.integers(len(tiles)))]
         return (int(r), int(c))
 
-    # ----------------------------------------------------------------- vision
     def _los(self, a, b) -> bool:
-        """Bresenham line of sight; walls and closed doors block (endpoints excepted)."""
         (r0, c0), (r1, c1) = a, b
         dr, dc = abs(r1 - r0), abs(c1 - c0)
         sr = 1 if r1 > r0 else -1
@@ -202,7 +185,7 @@ class DungeonPursuitEnv:
             for j in range(n):
                 r, c = pr + i - R, pc + j - R
                 if not (0 <= r < self.H and 0 <= c < self.W):
-                    ch[0, i, j] = 1.0          # outside the map counts as wall
+                    ch[0, i, j] = 1.0
                     continue
                 if not self._los((pr, pc), (r, c)):
                     continue
@@ -220,14 +203,14 @@ class DungeonPursuitEnv:
         s[2] = min(self.keys_held, 1)
         s[3] = self.t / self.cfg.max_steps
         visible = self.sees_other(role)
-        if role == EVADER:                      # goal knowledge: key or exit
+        if role == EVADER:
             tg = self.objective_targets()
             f = self.dist_field(tg, self.keys_held > 0)
             d = f[pr, pc]
             a = self.first_action_toward((pr, pc), tg, self.keys_held > 0)
-            s[4], s[5] = MOVES[a]               # path-direction compass
+            s[4], s[5] = MOVES[a]
             s[6] = 1.0 if d < 0 else min(d, 100) / 100
-        elif visible:                           # Hunter only targets what it sees
+        elif visible:
             f = self.dist_field({opos}, self.cfg.hunter_opens_doors)
             d = f[pr, pc]
             a = self.first_action_toward((pr, pc), {opos}, self.cfg.hunter_opens_doors)
@@ -241,9 +224,7 @@ class DungeonPursuitEnv:
     def _obs_all(self):
         return {HUNTER: self.observe(HUNTER), EVADER: self.observe(EVADER)}
 
-    # ------------------------------------------------------------------- step
     def resolve_move(self, role, action):
-        """Returns (new_pos, opened_door_pos_or_None) without changing state."""
         r, c = self.pos[role]
         dr, dc = MOVES[int(action)]
         nr, nc = r + dr, c + dc
@@ -261,7 +242,6 @@ class DungeonPursuitEnv:
         cfg = self.cfg
         h_old, e_old = self.pos[HUNTER], self.pos[EVADER]
 
-        # shaping baselines (cached BFS fields)
         tg_old = self.objective_targets()
         d_e_old = self.dist_field(tg_old, self.keys_held > 0)[e_old]
         d_h_old = self.dist_field({e_old}, cfg.hunter_opens_doors)[h_old]
@@ -270,7 +250,7 @@ class DungeonPursuitEnv:
         e_new, e_open = self.resolve_move(EVADER, actions[EVADER])
         h_path = [h_new]
         k = cfg.hunter_sprint_every
-        if k > 0 and (self.t + 1) % k == 0:   # sprint: repeat the Hunter's action once more
+        if k > 0 and (self.t + 1) % k == 0:
             self.pos[HUNTER] = h_new
             h_new2, h_open2 = self.resolve_move(HUNTER, actions[HUNTER])
             self.pos[HUNTER] = h_old
@@ -300,7 +280,6 @@ class DungeonPursuitEnv:
             self.keys_held += 1
             rew[EVADER] += cfg.key_bonus
 
-        # path-distance shaping
         d_e_new = self.dist_field(tg_old, True if self.keys_held > 0 else False)[e_new]
         if d_e_old >= 0 and d_e_new >= 0:
             rew[EVADER] += cfg.shaping * (d_e_old - d_e_new)
@@ -326,7 +305,6 @@ class DungeonPursuitEnv:
         info = {"outcome": self.outcome or "ongoing", "t": self.t}
         return self._obs_all(), rew, term, trunc, info
 
-    # ------------------------------------------------------------ rendering
     def snapshot(self):
         return dict(grid=self.grid, hunter=self.pos[HUNTER], evader=self.pos[EVADER],
                     exit=self.exit_pos, keys=list(self.keys), doors=list(self.doors),
