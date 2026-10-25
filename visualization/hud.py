@@ -198,7 +198,7 @@ def agent_card(w, role, spec, probs, ui):
     m = _px(16, ui)
     _dot(d, m + _px(4, ui), _px(21, ui), _px(6, ui), color)
     _text(d, (m + _px(18, ui), _px(21, ui)), role.title(), _px(15, ui), th.TEXT, "bold", "lm")
-    badge = "PPO" if spec.startswith("ppo") else "SCRIPTED"
+    badge = ("DQN" if spec.startswith("dqn") else "PPO") if ppo else "SCRIPTED"
     _chip(img, w - m - _px(15, ui) - int(th.font(_px(11, ui), "bold").getlength(badge)), _px(11, ui), badge,
           color if ppo else th.TEXT_FAINT, ui, 10)
     name = spec.split(":", 1)[-1] if spec else "-"

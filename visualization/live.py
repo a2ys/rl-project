@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from agents.factory import make_agent
+from agents.learned import LearnedAgent
 from env.dungeon_env import EVADER, HUNTER, DungeonPursuitEnv, EnvConfig
 from env.generator import WALL
 from visualization import hud
@@ -20,18 +21,12 @@ FRAME_BUDGET_MS = 16
 
 
 def action_probs(agent, env, role):
-    model = getattr(agent, "model", None)
-    if model is None:
+    if not isinstance(agent, LearnedAgent):
         return None
-    import torch
-    obs_t, _ = model.policy.obs_to_tensor(env.observe(role))
-    with torch.no_grad():
-        return model.policy.get_distribution(obs_t).distribution.probs[0].cpu().numpy()
+    return agent.probs(env.observe(role))
 
 
 def value_heatmap(agent, env, role):
-    import torch
-    model = agent.model
     heat = np.full((env.H, env.W), np.nan)
     saved = env.pos[role]
     for r in range(env.H):
@@ -39,9 +34,7 @@ def value_heatmap(agent, env, role):
             if env.grid[r, c] == WALL:
                 continue
             env.pos[role] = (r, c)
-            obs_t, _ = model.policy.obs_to_tensor(env.observe(role))
-            with torch.no_grad():
-                heat[r, c] = float(model.policy.predict_values(obs_t)[0, 0])
+            heat[r, c] = agent.value(env.observe(role))
     env.pos[role] = saved
     lo, hi = np.nanmin(heat), np.nanmax(heat)
     return (heat - lo) / (hi - lo + 1e-9)
@@ -193,7 +186,7 @@ class Viewer:
         self.show_legend = not self.show_legend
 
     def cycle_heat(self):
-        ppo = [i + 1 for i, k in enumerate(ROLES) if hasattr(self.agents[k], "model")]
+        ppo = [i + 1 for i, k in enumerate(ROLES) if isinstance(self.agents[k], LearnedAgent)]
         order = [0] + ppo
         self.heat_mode = order[(order.index(self.heat_mode) + 1) % len(order)]
         self.heat = None
