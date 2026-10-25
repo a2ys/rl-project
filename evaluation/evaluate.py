@@ -1,4 +1,5 @@
 import argparse
+import copy
 import csv
 from pathlib import Path
 
@@ -9,30 +10,59 @@ from env.dungeon_env import EVADER, HUNTER, DungeonPursuitEnv, EnvConfig
 from env.generator import SEED_SPLITS
 
 
-def evaluate(hunter, evader, seeds, cfg=None):
-    env = DungeonPursuitEnv(cfg or EnvConfig(), seeds=[0])
-    n = nh = ne = nt = 0
-    lens, rh, re = [], [], []
-    for s in seeds:
-        env.reset(seed=int(s))
-        hunter.reset()
-        evader.reset()
-        ret_h = ret_e = 0.0
-        while True:
-            acts = {HUNTER: hunter.act(env, HUNTER), EVADER: evader.act(env, EVADER)}
-            _, rew, term, trunc, info = env.step(acts)
-            ret_h += rew[HUNTER]
-            ret_e += rew[EVADER]
+def _play_chunk(hunter, evader, seeds, cfg):
+    """Plays one episode per seed with all maps in lockstep. Agents with `act_batch`
+    get one batched call per step; scripted agents are copied per map (they keep state)."""
+    envs = [DungeonPursuitEnv(cfg, seeds=[0]) for _ in seeds]
+    obs = [e.reset(seed=int(s))[0] for e, s in zip(envs, seeds)]
+    players = {}
+    for role, ag in ((HUNTER, hunter), (EVADER, evader)):
+        if hasattr(ag, "act_batch"):
+            ag.reset()
+            players[role] = ag
+        else:
+            players[role] = [copy.deepcopy(ag) for _ in envs]
+            for a in players[role]:
+                a.reset()
+    active = list(range(len(envs)))
+    ret = np.zeros((len(envs), 2))
+    outcomes = [""] * len(envs)
+    while active:
+        acts = {}
+        for role, p in players.items():
+            if isinstance(p, list):
+                acts[role] = [p[i].act(envs[i], role) for i in active]
+            else:
+                acts[role] = p.act_batch(np.stack([obs[i][role] for i in active]))
+        still = []
+        for j, i in enumerate(active):
+            o, rew, term, trunc, info = envs[i].step(
+                {HUNTER: int(acts[HUNTER][j]), EVADER: int(acts[EVADER][j])})
+            obs[i] = o
+            ret[i] += (rew[HUNTER], rew[EVADER])
             if term or trunc:
-                break
-        o = info["outcome"]
-        n += 1
-        nh += o == "caught"
-        ne += o == "escaped"
-        nt += o == "timeout"
-        lens.append(env.t)
-        rh.append(ret_h)
-        re.append(ret_e)
+                outcomes[i] = info["outcome"]
+            else:
+                still.append(i)
+        active = still
+    return outcomes, [e.t for e in envs], ret
+
+
+def evaluate(hunter, evader, seeds, cfg=None, chunk=100):
+    cfg = cfg or EnvConfig()
+    seeds = list(seeds)
+    outcomes, lens, rets = [], [], []
+    for s in range(0, len(seeds), chunk):
+        o, l, r = _play_chunk(hunter, evader, seeds[s:s + chunk], cfg)
+        outcomes += o
+        lens += l
+        rets.append(r)
+    ret = np.concatenate(rets)
+    n = len(outcomes)
+    nh = sum(o == "caught" for o in outcomes)
+    ne = sum(o == "escaped" for o in outcomes)
+    nt = sum(o == "timeout" for o in outcomes)
+    rh, re = ret[:, 0], ret[:, 1]
     return dict(n=n, hunter_win=nh / n, evader_win=ne / n, timeout=nt / n,
                 mean_len=float(np.mean(lens)), ret_hunter=float(np.mean(rh)),
                 ret_evader=float(np.mean(re)))
