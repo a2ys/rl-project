@@ -36,6 +36,22 @@ class ChaseHunter(Agent):
         return env.first_action_toward(me, {self.target}, env.cfg.hunter_opens_doors)
 
 
+class NoisyAgent(Agent):
+    """Takes a random action with probability eps, otherwise defers to base (opponent skill knob)."""
+
+    def __init__(self, base, eps=0.0):
+        self.base, self.eps = base, eps
+
+    def reset(self):
+        self.base.reset()
+
+    def act(self, env, role):
+        a = self.base.act(env, role)
+        if self.eps > 0 and env.rng.random() < self.eps:
+            return int(env.rng.integers(5))
+        return a
+
+
 class PathEvader(Agent):
     def __init__(self, flee_radius=2):
         self.flee_radius = flee_radius
