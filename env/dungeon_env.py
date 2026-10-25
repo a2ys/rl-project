@@ -70,6 +70,7 @@ class DungeonPursuitEnv:
         if map_seed is None:
             map_seed = int(self.rng.choice(self.seeds))
         c = self.cfg
+        self.H = self.W = c.size
         self.dungeon = _dungeon(map_seed, c.size, c.n_rooms, c.n_doors, c.obstacle_density,
                          c.hunter_exit_dist, c.hunter_min_dist)
         d = self.dungeon
