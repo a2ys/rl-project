@@ -28,37 +28,45 @@ BONE = (232, 222, 200)
 OUTLINE = (16, 12, 20)
 TIMEOUT = (150, 146, 170)
 
-UI_BG = (14, 13, 22)
-PANEL_FILL = (20, 18, 30, 205)
-PANEL_EDGE = (92, 84, 120, 150)
-CARD_FILL = (34, 31, 48, 190)
-TEXT = (236, 232, 244)
-TEXT_DIM = (150, 146, 172)
-TEXT_FAINT = (104, 100, 128)
-ACCENT = (255, 178, 84)
-BAR_TRACK = (50, 46, 68)
+# UI: one quiet instrument column on cool graphite; amber is the only accent (torchlight)
+UI_BG = (12, 13, 18)
+RULE = (38, 40, 52)
+TRACK = (30, 32, 42)
+TEXT = (230, 231, 236)
+TEXT_DIM = (146, 149, 163)
+TEXT_FAINT = (92, 95, 111)
+ACCENT = (232, 168, 82)
+PANEL_FILL = (12, 13, 18, 228)
+PANEL_EDGE = (*RULE, 255)
+BAR_TRACK = TRACK
 HEAT_STOPS = ((0.0, (28, 22, 78)), (0.5, (190, 56, 98)), (1.0, (255, 214, 96)))
 
-OUTCOME_STYLE = {"caught": ("CAUGHT", HUNTER, "The Hunter got its prey"),
-                 "escaped": ("ESCAPED", EXIT_GREEN, "The Evader reached the exit"),
-                 "timeout": ("TIME OUT", TIMEOUT, "Nobody won this round")}
+OUTCOME_STYLE = {"caught": ("Caught", HUNTER, "The Hunter caught the Evader"),
+                 "escaped": ("Escaped", EXIT_GREEN, "The Evader reached the exit"),
+                 "timeout": ("Time out", TIMEOUT, "Nobody won within 200 steps")}
 
 ROLE_COLOR = {"hunter": HUNTER, "evader": EVADER}
 
 _FONTS = {}
-_FONT_FILES = {"title": ("georgiab.ttf", "segoeuib.ttf", "arialbd.ttf"),
-               "ui": ("bahnschrift.ttf", "segoeui.ttf", "arial.ttf"),
-               "bold": ("seguisb.ttf", "segoeuib.ttf", "arialbd.ttf"),
-               "mono": ("consola.ttf", "cour.ttf")}
+# kind -> (file, variable-font instance or None); first file that loads wins
+_FONT_FILES = {"display": (("bahnschrift.ttf", "Bold SemiCondensed"), ("arialbd.ttf", None)),
+               "label": (("bahnschrift.ttf", "SemiBold Condensed"), ("arialbd.ttf", None)),
+               "num": (("bahnschrift.ttf", "SemiBold"), ("arialbd.ttf", None)),
+               "ui": (("segoeui.ttf", None), ("arial.ttf", None)),
+               "bold": (("seguisb.ttf", None), ("arialbd.ttf", None)),
+               "mono": (("CascadiaMono.ttf", None), ("consola.ttf", None), ("cour.ttf", None))}
+_FONT_FILES["title"] = _FONT_FILES["display"]
 
 
 def font(size, kind="ui"):
     key = (int(size), kind)
     if key not in _FONTS:
         loaded = None
-        for name in _FONT_FILES[kind]:
+        for name, inst in _FONT_FILES[kind]:
             try:
                 loaded = ImageFont.truetype(name, int(size))
+                if inst:
+                    loaded.set_variation_by_name(inst)
                 break
             except OSError:
                 continue

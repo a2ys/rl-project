@@ -45,11 +45,35 @@ def hex_color(c):
 
 
 def make_background(w, h):
-    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
-    r = np.sqrt(((xs / w - 0.5) * 2) ** 2 + ((ys / h - 0.5) * 2) ** 2) / 1.414
-    base = np.array(th.UI_BG, np.float32) * (1.25 - 0.9 * r ** 1.5)[..., None]
-    base += np.random.default_rng(0).normal(0, 1.2, (h, w, 1))
-    return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
+    return Image.new("RGB", (w, h), th.UI_BG)
+
+
+def agent_value(agent, env, role):
+    if not isinstance(agent, LearnedAgent):
+        return None
+    return agent.value(env.observe(role))
+
+
+class EpisodeLog:
+    """V(s) history per learned agent and the steps at which the key / door events happened."""
+
+    def __init__(self, env, agents, maxlen=80):
+        self.values = {k: deque(maxlen=maxlen) for k in ROLES if isinstance(agents[k], LearnedAgent)}
+        self.events = []
+        self._keys, self._doors = env.keys_held, len(env.doors)
+        self.record(env, agents)
+
+    def record(self, env, agents):
+        for k, q in self.values.items():
+            q.append(agent_value(agents[k], env, k))
+        if env.keys_held > self._keys:
+            self.events.append(("key", env.t))
+        if len(env.doors) < self._doors:
+            self.events.append(("door", env.t))
+        self._keys, self._doors = env.keys_held, len(env.doors)
+
+    def info(self):
+        return dict(values={k: list(v) for k, v in self.values.items()}, events=list(self.events))
 
 
 class Viewer:
@@ -102,9 +126,9 @@ class Viewer:
         self._resize_job = None
         cw, ch = max(cw, 640), max(ch, 480)
         ui = max(0.75, min(1.7, ch / 900))
-        margin, gap = int(14 * ui), int(18 * ui)
-        panel_w = int(min(360 * ui, cw * 0.36))
-        footer_h = int((34 + 26 + 6) * ui) + 2 * margin
+        margin, gap = int(20 * ui), int(32 * ui)
+        panel_w = int(min(380 * ui, cw * 0.38))
+        footer_h = int(22 * ui) + 2 * margin
         area = (margin, margin, cw - margin, ch - footer_h)
         T = tile_for_area(area[2] - area[0] - panel_w - gap, area[3] - area[1], self.env.H, self.env.W)
         self.r.set_tile(T)
@@ -118,8 +142,7 @@ class Viewer:
             panel_h=area[3] - map_xy[1],
             id=self._layout_id, bg=make_background(cw, ch),
             frame_xy=(map_xy[0] - pad, map_xy[1] - pad),
-            map_frame=rounded_panel(mw + 2 * pad, mh + 2 * pad, pad + 1, (6, 5, 10, 255), th.PANEL_EDGE,
-                                    max(1, int(ui))))
+            map_frame=rounded_panel(mw + 2 * pad, mh + 2 * pad, 2, (6, 6, 9, 255), th.PANEL_EDGE, 1))
         self._hud_cache, self._legend_pos = {}, None
         self.photos = {}
         self.canvas.coords(self.map_item, *map_xy)
@@ -134,6 +157,7 @@ class Viewer:
         self.done, self.done_at = False, 0.0
         self.last_step = time.perf_counter()
         self.heat, self.heat_t = None, -99
+        self.log = EpisodeLog(self.env, self.agents)
         self.refresh_derived()
 
     def refresh_derived(self):
@@ -162,6 +186,7 @@ class Viewer:
         _, _, term, trunc, info = self.env.step(acts)
         for k in ROLES:
             self.trails[k].append(self.env.pos[k])
+        self.log.record(self.env, self.agents)
         self.last_step = time.perf_counter()
         if term or trunc:
             self.done, self.done_at = True, self.last_step
@@ -207,9 +232,9 @@ class Viewer:
         return hit[1]
 
     def hud_state(self):
-        tag = {0: "", 1: "heatmap: hunter V(s)", 2: "heatmap: evader V(s)"}[self.heat_mode]
+        tag = {0: "", 1: "Hunter V(s)", 2: "Evader V(s)"}[self.heat_mode]
         s = hud.HudState.from_snapshot(self.env.snapshot(), self.specs[HUNTER], self.specs[EVADER],
-                                       self.probs, self.stats, self.info)
+                                       self.probs, self.stats, {**self.info, **self.log.info()})
         s.sps, s.paused, s.heat_tag = self.sps, self.paused, tag
         return s
 
@@ -235,7 +260,7 @@ class Viewer:
     def backdrop(self, state):
         L, ui = self.layout, self.layout["ui"]
         cw, ch = L["size"]
-        m, strip_w = L["margin"], cw - 2 * L["margin"]
+        m, strip_w = L["margin"], cw - L["map_xy"][0] - L["margin"]
         flags = dict(vision=self.show_vision, trails=self.show_trails, legend=self.show_legend)
         key = (L["id"], state.key(), tuple(flags.values()), self.heat_mode)
 
@@ -245,9 +270,7 @@ class Viewer:
             side = hud.render_side_panel(L["panel_w"], L["panel_h"], state, ui)
             out.paste(side, L["panel_xy"], side)
             keys = hud.key_strip(strip_w, flags, ui)
-            out.paste(keys, (m, ch - keys.height - m), keys)
-            playing = hud.status_strip(strip_w, state, ui)
-            out.paste(playing, (m, ch - keys.height - m - playing.height - int(6 * ui)), playing)
+            out.paste(keys, (L["map_xy"][0], ch - keys.height - m), keys)
             legend = self.legend()
             if legend and not legend[2]:
                 out.paste(legend[0], legend[1], legend[0])

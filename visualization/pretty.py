@@ -22,7 +22,6 @@ class PrettyRenderer:
         self._facing, self._last_pos = {}, {}
         self._static_key = self._scene_key = None
         self._known_doors = set()
-        self._banner_cache = {}
         self.set_tile(tile)
 
     def set_tile(self, tile):
@@ -33,7 +32,6 @@ class PrettyRenderer:
         self.sprites, self.props = Sprites(self.T), Props(self.T, self.Hh)
         self._static = self._scene = None
         self._static_key = self._scene_key = None
-        self._banner_cache = {}
 
     def map_size(self, rows, cols):
         return cols * self.T, rows * self.T + self.Hh
@@ -164,9 +162,6 @@ class PrettyRenderer:
                                        (probs or {}).get(kind))
             self._reocclude(frame, box, int(depth), door_list)
 
-        outcome = snap.get("outcome", "")
-        if outcome in th.OUTCOME_STYLE:
-            self._banner(frame, outcome)
         return frame
 
     def _draw_key(self, frame, c, anim, rc):
@@ -229,25 +224,6 @@ class PrettyRenderer:
             c = th.mix(th.EXIT_GREEN, (255, 255, 255), 0.5 * (1 - t))
             d.ellipse([x - r, y - r, x + r, y + r], fill=c)
 
-    def _banner(self, frame, outcome):
-        key = (outcome, frame.size)
-        if key not in self._banner_cache:
-            title, color, sub = th.OUTCOME_STYLE[outcome]
-            w, h = frame.size
-            bh = max(60, int(self.T * 2.4))
-            band = Image.new("RGBA", (w, bh), (*th.shade(color, 0.28), 190))
-            d = ImageDraw.Draw(band)
-            d.rectangle([0, 0, w, 2], fill=(*color, 255))
-            d.rectangle([0, bh - 3, w, bh], fill=(*color, 255))
-            d.text((w // 2, bh * 0.42), "  ".join(title), font=th.font(bh * 0.4, "title"),
-                   fill=th.TEXT, anchor="mm")
-            d.text((w // 2, bh * 0.8), sub, font=th.font(bh * 0.16), fill=th.mix(color, (255, 255, 255), 0.6),
-                   anchor="mm")
-            self._banner_cache[key] = band
-        band = self._banner_cache[key]
-        y = (frame.height - band.height) // 2
-        frame.paste(band, (0, y), band)
-
     def render(self, snap, hp=None, ep=None, anim=0.0, trails=None, vision=None, heat=None,
                probs=None, stats=None, hspec="", espec="", footer=(), panel=True,
                capture_radius=0, info=None):
@@ -256,8 +232,11 @@ class PrettyRenderer:
             return img
         from visualization import hud
         state = hud.HudState.from_snapshot(snap, hspec, espec, probs, stats, info)
-        side = hud.render_side_panel(340, img.height, state, 1.0)
-        out = Image.new("RGB", (img.width + side.width, img.height), th.UI_BG)
-        out.paste(img, (0, 0))
-        out.paste(side, (img.width, 0), side)
+        gap, pad = 28, 20
+        side = hud.render_side_panel(380, 2000, state, 1.0)
+        side = side.crop((0, 0, side.width, (side.getbbox() or (0, 0, 0, img.height))[3] + 4))
+        h = max(img.height, side.height)
+        out = Image.new("RGB", (pad + img.width + gap + side.width + pad, h + 2 * pad), th.UI_BG)
+        out.paste(img, (pad, pad + (h - img.height) // 2))
+        out.paste(side, (pad + img.width + gap, pad), side)
         return out

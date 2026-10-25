@@ -5,7 +5,7 @@ from pathlib import Path
 from agents.factory import make_agent
 from env.dungeon_env import EVADER, HUNTER, DungeonPursuitEnv, EnvConfig
 from visualization.hud import env_info
-from visualization.live import action_probs
+from visualization.live import EpisodeLog, action_probs
 from visualization.pretty import PrettyRenderer
 
 ROLES = (HUNTER, EVADER)
@@ -29,6 +29,7 @@ def main():
     for ag in agents.values():
         ag.reset()
     trails = {k: deque([env.pos[k]], maxlen=14) for k in ROLES}
+    log = EpisodeLog(env, agents)
     stats = dict(n=0, caught=0, escaped=0, timeout=0)
     frames, tick = [], 0
 
@@ -38,7 +39,7 @@ def main():
         frames.append(rend.render(
             env.snapshot(), hp=pos[HUNTER], ep=pos[EVADER], anim=tick * 0.08,
             trails={k: list(trails[k]) for k in ROLES}, probs=probs, stats=None,
-            hspec=a.hunter, espec=a.evader, info=env_info(env),
+            hspec=a.hunter, espec=a.evader, info={**env_info(env), **log.info()},
             capture_radius=getattr(env.cfg, "capture_radius", 0)))
 
     probs = {k: action_probs(agents[k], env, k) for k in ROLES}
@@ -49,6 +50,7 @@ def main():
         _, _, term, trunc, info = env.step(acts)
         for k in ROLES:
             trails[k].append(env.pos[k])
+        log.record(env, agents)
         for i in range(1, a.smooth + 1):
             f = i / a.smooth
             f = f * f * (3 - 2 * f)

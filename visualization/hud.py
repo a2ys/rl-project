@@ -1,5 +1,7 @@
 import dataclasses
+import re
 from dataclasses import dataclass, field
+from pathlib import PurePath
 
 from PIL import Image, ImageDraw
 
@@ -10,10 +12,23 @@ from visualization.props import Props
 from visualization.sprites import Sprites
 
 HIDDEN_RULE_WORDS = ("reward", "penalty", "bonus", "shaping", "density", "win")
-KEY_HELP = (("SPACE", "pause"), ("N / P", "next / prev map"), ("R", "restart"), ("S", "step"),
-            ("+ / -", "speed"), ("V", "vision"), ("T", "trails"), ("H", "heatmap"),
+KEY_HELP = (("SPACE", "pause"), ("N P", "next / prev map"), ("R", "restart"), ("S", "step"),
+            ("+ -", "speed"), ("V", "vision"), ("T", "trails"), ("H", "heatmap"),
             ("L", "legend"), ("C", "screenshot"), ("Q", "quit"))
 KEY_TOGGLES = {"V": "vision", "T": "trails", "L": "legend"}
+SPLIT_TEXT = {"train": ("TRAINING MAP", False), "val": ("VALIDATION · UNSEEN", True),
+              "test": ("TEST · UNSEEN", True), "custom": ("CUSTOM MAP", False)}
+SCRIPTED = {"chase": "Chases the Evader when it can see it, otherwise patrols.",
+            "chase_oracle": "Always knows where the Evader is and chases it.",
+            "path": "Walks the shortest path to key, door and exit, and steps away "
+                    "when the Hunter is within 2 tiles.",
+            "random": "Picks a random move every step.",
+            "idle": "Never moves."}
+RUN_NAMES = {"selfplay": "self-play", "independent": "independent",
+             "hunter_vs_path": "trained vs path Evader", "evader_vs_chase": "trained vs chase Hunter",
+             "hunter_vs_random": "trained vs random Evader"}
+# compass cell (row, col) for UP, DOWN, LEFT, RIGHT, STAY
+COMPASS = ((0, 1), (2, 1), (1, 0), (1, 2), (1, 1))
 
 
 def seed_split(seed):
@@ -32,6 +47,18 @@ def rules_from_config(cfg):
         text = ("yes" if v else "no") if isinstance(v, bool) else f"{v:g}" if isinstance(v, float) else str(v)
         rules.append((f.name.replace("_", " "), text))
     return rules
+
+
+def describe_agent(spec):
+    """(kind line, description or None) for the agent card."""
+    kind, _, path = (spec or "").partition(":")
+    if not path:
+        return f"Scripted · {kind or '-'}", SCRIPTED.get(kind)
+    algo = {"dqn": "DQN", "ppogreedy": "PPO greedy"}.get(kind, "PPO")
+    run = re.sub(r"_s\d+$", "", re.sub(r"^(check_|dqn_)", "", PurePath(path).parent.name))
+    base, cur = run.split("_cur")[0], "_cur" in run
+    text = RUN_NAMES.get(base, base.replace("_", " ") or PurePath(path).stem)
+    return f"{algo} · {text}{' + curriculum' if cur else ''}", None
 
 
 @dataclass
@@ -56,6 +83,8 @@ class HudState:
     paused: bool = False
     heat_tag: str = ""
     rules: list = field(default_factory=list)
+    values: dict = field(default_factory=dict)
+    events: list = field(default_factory=list)
 
     @classmethod
     def from_snapshot(cls, snap, hspec="", espec="", probs=None, stats=None, info=None):
@@ -71,7 +100,8 @@ class HudState:
     def key(self):
         probs = {k: None if v is None else tuple(round(float(x), 2) for x in v)
                  for k, v in self.probs.items()}
-        return repr(dataclasses.replace(self, probs=probs))
+        values = {k: tuple(round(float(x), 3) for x in v) for k, v in self.values.items()}
+        return repr(dataclasses.replace(self, probs=probs, values=values))
 
 
 def env_info(env):
@@ -89,62 +119,50 @@ def _px(v, ui):
     return max(1, int(round(v * ui)))
 
 
-def _text(d, xy, s, size, color=th.TEXT, kind="ui", anchor="la"):
-    d.text(xy, s, font=th.font(size, kind), fill=color, anchor=anchor)
+class Pen:
+    """Drawing helpers in UI units (scaled by `ui`)."""
 
+    def __init__(self, img, ui):
+        self.img, self.d, self.ui = img, ImageDraw.Draw(img), ui
 
-def _card(w, h, ui):
-    return rounded_panel(w, h, _px(14, ui), th.CARD_FILL, th.PANEL_EDGE, 1)
+    def p(self, v):
+        return _px(v, self.ui)
 
+    def font(self, size, kind="ui"):
+        return th.font(self.p(size), kind)
 
-def _chip(img, x, y, label, color, ui, size=11):
-    f = th.font(_px(size, ui), "bold")
-    tw = int(f.getlength(label))
-    w, h = tw + _px(14, ui), _px(size + 9, ui)
-    pill = rounded_panel(w, h, h // 2, (*color, 70), (*color, 190), 1)
-    img.alpha_composite(pill, (x, y))
-    ImageDraw.Draw(img).text((x + w // 2, y + h // 2), label, font=f, fill=th.mix(color, (255, 255, 255), 0.55),
-                             anchor="mm")
-    return w
+    def text(self, xy, s, size, color=th.TEXT, kind="ui", anchor="ls"):
+        self.d.text(xy, s, font=self.font(size, kind), fill=color, anchor=anchor)
 
+    def width(self, s, size, kind="ui"):
+        return self.font(size, kind).getlength(s)
 
-def _bar(img, x, y, w, h, frac, color):
-    img.alpha_composite(rounded_panel(w, h, h // 2, (*th.BAR_TRACK, 255)), (x, y))
-    if frac > 0:
-        fw = max(h, int(w * min(1.0, frac)))
-        img.alpha_composite(rounded_panel(fw, h, h // 2, (*color, 255)), (x, y))
+    def label(self, xy, s, color=th.TEXT_DIM, size=12.5, right=False):
+        """Uppercase tracked label (baseline anchored)."""
+        f, track = self.font(size, "label"), self.p(1.3)
+        w = sum(f.getlength(ch) for ch in s) + track * (len(s) - 1)
+        x, y = (xy[0] - w if right else xy[0]), xy[1]
+        for ch in s:
+            self.d.text((x, y), ch, font=f, fill=color, anchor="ls")
+            x += f.getlength(ch) + track
+        return w
 
+    def rule(self, y, x0, x1):
+        self.d.line([(x0, y), (x1, y)], fill=th.RULE, width=1)
 
-def _dot(d, x, y, r, color):
-    d.ellipse([x - r, y - r, x + r, y + r], fill=color)
+    def rect(self, box, fill=None, outline=None, width=1):
+        self.d.rectangle([int(v) for v in box], fill=fill, outline=outline, width=width)
 
-
-def title_card(w, s, ui):
-    h = _px(112, ui)
-    img = _card(w, h, ui)
-    d = ImageDraw.Draw(img)
-    m = _px(16, ui)
-    _text(d, (m, _px(10, ui)), "DUNGEON PURSUIT", _px(23, ui), th.TEXT, "title")
-    _text(d, (m, _px(42, ui)), "Hunter vs Evader  ·  procedural dungeons", _px(12, ui), th.TEXT_DIM)
-    x = m
-    x += _chip(img, x, _px(64, ui), f"SEED {s.seed}", th.ACCENT, ui) + _px(6, ui)
-    _chip(img, x, _px(64, ui), seed_split(s.seed).upper(), th.EVADER, ui)
-    _text(d, (w - m, _px(66, ui)), f"step {s.t} / {s.max_steps}", _px(13, ui), th.TEXT, "ui", "ra")
-    _bar(img, m, h - _px(18, ui), w - 2 * m, _px(7, ui), s.t / max(1, s.max_steps), th.ACCENT)
-    return img
-
-
-def status_headline(s):
-    if s.outcome in th.OUTCOME_STYLE:
-        title, color, sub = th.OUTCOME_STYLE[s.outcome]
-        return f"{title.title()} · {sub}", color
-    if s.doors_total and s.doors_left == 0:
-        return "Door open · dash for the exit", th.EXIT_GREEN
-    if s.keys_held:
-        return "Evader has the key", th.KEY_GOLD
-    if s.doors_left and s.keys_on_map:
-        return "Evader is searching for the key", th.EVADER
-    return "Evader heads for the exit", th.EXIT_GREEN
+    def wrap(self, s, size, w, kind="ui"):
+        lines, cur = [], ""
+        for word in s.split():
+            trial = f"{cur} {word}".strip()
+            if self.width(trial, size, kind) <= w or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = word
+        return lines + ([cur] if cur else [])
 
 
 def _tiles(n):
@@ -153,190 +171,266 @@ def _tiles(n):
     return "blocked" if n < 0 else f"{n} tile{'s' if n != 1 else ''}"
 
 
-def status_card(w, s, ui):
+def situation(s):
+    if s.doors_total and s.doors_left == 0:
+        return "Door open, Evader runs for the exit", th.EXIT_GREEN
     if s.keys_held:
-        key = "held by Evader"
+        return "Evader has the key", th.KEY_GOLD
+    if s.doors_left and s.keys_on_map:
+        return "Evader is looking for the key", th.EVADER
+    return "Evader heads for the exit", th.EXIT_GREEN
+
+
+def _header(pen, x, y, w, s):
+    p = pen.p
+    pen.label((x, y), "DUNGEON PURSUIT")
+    if s.sps is not None:
+        state = "PAUSED" if s.paused else f"{s.sps:.0f} STEPS/S"
+        tw = pen.label((x + w, y), state, th.ACCENT if s.paused else th.TEXT_DIM, right=True)
+        dot = th.ACCENT if s.paused else th.EXIT_GREEN
+        r, cx = p(3), x + w - tw - p(9)
+        pen.d.ellipse([cx - r, y - p(7) - r, cx + r, y - p(7) + r], fill=dot)
+    y += p(36)
+    pen.text((x, y), f"Map {s.seed}", 30, th.TEXT, "display")
+    split, unseen = SPLIT_TEXT[seed_split(s.seed)]
+    pen.label((x + w, y - p(3)), split, th.ACCENT if unseen else th.TEXT_DIM, right=True)
+    y += p(30)
+
+    pen.label((x, y), "EPISODE")
+    pen.text((x + w, y), f"{s.t} / {s.max_steps}", 13, th.TEXT, "num", "rs")
+    y += p(12)
+    th_ = p(4)
+    pen.rect((x, y, x + w, y + th_), fill=th.TRACK)
+    fill_w = int(w * min(1.0, s.t / max(1, s.max_steps)))
+    if fill_w:
+        pen.rect((x, y, x + fill_w, y + th_), fill=th.ACCENT)
+    next_x = x
+    for kind, t in sorted(s.events, key=lambda e: e[1]):
+        ex = x + int(w * min(1.0, t / max(1, s.max_steps)))
+        col = th.KEY_GOLD if kind == "key" else th.EXIT_GREEN
+        pen.rect((ex - p(1), y - p(5), ex + p(1), y + th_ + p(5)), fill=col)
+        text = f"{kind} at {t}"
+        tw = pen.width(text, 11.5)
+        tx = min(max(ex - tw / 2, next_x), x + w - tw)
+        pen.text((tx, y + th_ + p(19)), text, 11.5, th.TEXT_DIM)
+        next_x = tx + tw + p(12)
+    return y + th_ + (p(26) if s.events else p(10))
+
+
+def _situation(pen, x, y, w, s):
+    p = pen.p
+    if s.outcome in th.OUTCOME_STYLE:
+        title, color, sub = th.OUTCOME_STYLE[s.outcome]
+        y += p(30)
+        pen.text((x, y), title, 30, color, "display")
+        y += p(22)
+        pen.text((x, y), f"{sub} at step {s.t}.", 12.5, th.TEXT_DIM)
+        y += p(8)
+    else:
+        text, color = situation(s)
+        y += p(22)
+        pen.rect((x, y - p(10), x + p(8), y - p(2)), fill=color)
+        pen.text((x + p(16), y), text, 15, th.TEXT, "bold")
+        y += p(4)
+
+    if s.keys_held:
+        key = "carried by Evader"
     elif s.keys_on_map:
         key = "on the floor" if not (s.doors_total and s.doors_left == 0) else "not needed"
     else:
         key = "used" if s.doors_total else "none"
     door = "none" if not s.doors_total else ("open" if s.doors_left == 0 else "locked")
-    goal = "key" if s.goal == "key" else "exit"
-    rows = [("Key", key, th.KEY_GOLD if s.keys_held else th.TEXT),
-            ("Door", door, th.EXIT_GREEN if door == "open" else th.TEXT)]
+    rows = [("Key", key, None), ("Door", door, None)]
     if s.dist_hunter is not None:
-        rows.append(("Hunter to Evader", _tiles(s.dist_hunter), th.HUNTER))
-        rows.append((f"Evader to {goal}", _tiles(s.dist_evader), th.EVADER))
-    sight = [(who, other) for who, other in (("hunter", "Evader"), ("evader", "Hunter")) if who in s.sees]
-    row = _px(21, ui)
-    img = _card(w, _px(58, ui) + row * (len(rows) + len(sight)), ui)
-    d = ImageDraw.Draw(img)
-    m = _px(16, ui)
-    text, color = status_headline(s)
-    _dot(d, m + _px(4, ui), _px(24, ui), _px(5, ui), color)
-    _text(d, (m + _px(16, ui), _px(24, ui)), text, _px(14, ui), th.TEXT, "bold", "lm")
-    y = _px(46, ui)
-    for label, val, col in rows:
-        _text(d, (m, y), label, _px(12, ui), th.TEXT_DIM)
-        _text(d, (w - m, y), val, _px(12, ui), col, "bold", "ra")
-        y += row
-    for who, other in sight:
-        _text(d, (m, y), f"{who.title()} sees {other.lower()}", _px(12, ui), th.TEXT_DIM)
-        on = bool(s.sees[who])
-        _chip(img, w - m - _px(36, ui), y - _px(2, ui), "YES" if on else "NO",
-              th.ROLE_COLOR[who] if on else th.TEXT_FAINT, ui, 10)
-        y += row
-    return img
+        rows += [("Hunter → Evader", _tiles(s.dist_hunter), None),
+                 (f"Evader → {s.goal}", _tiles(s.dist_evader), None)]
+    for who, other in (("hunter", "Evader"), ("evader", "Hunter")):
+        if who in s.sees:
+            rows.append((f"{who.title()} can see {other}", "yes" if s.sees[who] else "no",
+                         th.ROLE_COLOR[who] if s.sees[who] else False))
+    if s.heat_tag:
+        rows.append(("Map overlay", s.heat_tag, None))
+    y += p(10)
+    for label, val, mark in rows:
+        y += p(21)
+        pen.text((x, y), label, 12.5, th.TEXT_DIM)
+        vx = x + w
+        pen.text((vx, y), val, 12.5, th.TEXT, "num", "rs")
+        if mark is not None:
+            r = p(4)
+            mx = vx - pen.width(val, 12.5, "num") - p(10)
+            box = (mx - r, y - p(4) - 2 * r + p(1), mx + r, y - p(4) + p(1))
+            pen.rect(box, fill=mark if mark else None, outline=th.TEXT_FAINT if not mark else None)
+    return y + p(6)
 
 
-def agent_card(w, role, spec, probs, ui):
+def _compass(pen, x, y, probs, color):
+    p = pen.p
+    c, gap = p(30), p(2)
+    best = max(range(5), key=lambda i: probs[i])
+    for i, (r, k) in enumerate(COMPASS):
+        cx, cy = x + k * (c + gap), y + r * (c + gap)
+        v = float(probs[i])
+        pen.rect((cx, cy, cx + c, cy + c), fill=th.mix(th.TRACK, color, min(1.0, v ** 0.75)))
+        if i == best:
+            pen.rect((cx, cy, cx + c - 1, cy + c - 1), outline=th.TEXT)
+        pen.text((cx + c / 2, cy + c / 2), f"{round(v * 100)}", 12, th.TEXT if v >= 0.3 else th.TEXT_DIM,
+                 "num", "mm")
+    return 3 * c + 2 * gap
+
+
+def _spark(pen, x, y, w, h, values, color, label):
+    p = pen.p
+    pen.label((x, y + p(10)), label)
+    if values:
+        v = values[-1]
+        pen.text((x + w, y + p(12)), f"{v:+.2f}", 18, th.TEXT, "num", "rs")
+    top, bot = y + p(24), y + h
+    if len(values) < 2:
+        pen.text((x, bot - p(4)), "collecting…", 11, th.TEXT_FAINT)
+        return
+    lo, hi = min(values), max(values)
+    pad = max(0.05, (hi - lo) * 0.12)
+    lo, hi = lo - pad, hi + pad
+
+    def ys(v):
+        return bot - (v - lo) / (hi - lo) * (bot - top)
+    if lo < 0 < hi:
+        zy = ys(0.0)
+        for xx in range(int(x), int(x + w), p(6)):
+            pen.d.line([(xx, zy), (min(x + w, xx + p(3)), zy)], fill=th.RULE, width=1)
+        pen.text((x - p(5), zy), "0", 10, th.TEXT_FAINT, "num", "rm")
+    n = len(values)
+    pts = [(x + i * w / (n - 1), ys(v)) for i, v in enumerate(values)]
+    pen.d.line(pts, fill=color, width=p(2), joint="curve")
+    ex, ey = pts[-1]
+    r = p(3.5)
+    pen.d.ellipse([ex - r - p(2), ey - r - p(2), ex + r + p(2), ey + r + p(2)], fill=th.UI_BG)
+    pen.d.ellipse([ex - r, ey - r, ex + r, ey + r], fill=color)
+
+
+def _agent(pen, x, y, w, role, spec, probs, values):
+    p = pen.p
     color = th.ROLE_COLOR[role]
-    ppo = probs is not None
-    h = _px(98 if ppo else 56, ui)
-    img = _card(w, h, ui)
-    d = ImageDraw.Draw(img)
-    m = _px(16, ui)
-    _dot(d, m + _px(4, ui), _px(21, ui), _px(6, ui), color)
-    _text(d, (m + _px(18, ui), _px(21, ui)), role.title(), _px(15, ui), th.TEXT, "bold", "lm")
-    badge = ("DQN" if spec.startswith("dqn") else "PPO") if ppo else "SCRIPTED"
-    _chip(img, w - m - _px(15, ui) - int(th.font(_px(11, ui), "bold").getlength(badge)), _px(11, ui), badge,
-          color if ppo else th.TEXT_FAINT, ui, 10)
-    name = spec.split(":", 1)[-1] if spec else "-"
-    name = name if len(name) <= 30 else "..." + name[-27:]
-    _text(d, (m + _px(18, ui), _px(40, ui)), name, _px(11, ui), th.TEXT_DIM, "ui", "lm")
-    if ppo:
-        n, gap = 5, _px(8, ui)
-        bw = (w - 2 * m - gap * (n - 1)) // n
-        base, top = h - _px(18, ui), _px(54, ui)
-        for i, lab in enumerate("UDLRS"):
-            x = m + i * (bw + gap)
-            img.alpha_composite(rounded_panel(bw, base - top, _px(3, ui), (*th.BAR_TRACK, 255)), (x, top))
-            fh = max(2, int((base - top) * float(probs[i])))
-            img.alpha_composite(rounded_panel(bw, fh, _px(3, ui), (*color, 255)), (x, base - fh))
-            _text(d, (x + bw // 2, h - _px(8, ui)), lab, _px(10, ui), th.TEXT_DIM, "ui", "mm")
-    return img
+    kind_line, desc = describe_agent(spec)
+    y += p(26)
+    pen.rect((x, y - p(11), x + p(10), y - p(1)), fill=color)
+    pen.text((x + p(18), y), role.title(), 17, th.TEXT, "display")
+    pen.text((x + w, y), kind_line, 12, th.TEXT_DIM, "ui", "rs")
+    y += p(12)
+    if probs is None:
+        for line in pen.wrap(desc or "Scripted agent.", 12.5, w):
+            y += p(18)
+            pen.text((x, y), line, 12.5, th.TEXT_DIM)
+        return y + p(4)
+    side = _compass(pen, x, y, probs, color)
+    algo = "max Q(s, a)" if kind_line.startswith("DQN") else "VALUE V(s)"
+    _spark(pen, x + side + p(18), y, w - side - p(18), side - p(14), values or [], color, algo)
+    pen.text((x, y + side + p(16)), "move probability, %", 10.5, th.TEXT_FAINT)
+    return y + side + p(20)
 
 
-def tally_card(w, stats, ui):
-    h = _px(86, ui)
-    img = _card(w, h, ui)
-    d = ImageDraw.Draw(img)
-    m = _px(16, ui)
-    n = stats["n"] if stats else 0
-    _text(d, (m, _px(10, ui)), "SESSION", _px(11, ui), th.TEXT_DIM, "bold")
-    _text(d, (w - m, _px(10, ui)), f"{n} episode{'s' if n != 1 else ''}", _px(11, ui), th.TEXT_DIM, "ui", "ra")
-    segs = [("caught", "Hunter", th.HUNTER), ("escaped", "Evader", th.EVADER), ("timeout", "Timeout", th.TIMEOUT)]
-    bx, by, bw, bh = m, _px(30, ui), w - 2 * m, _px(9, ui)
-    img.alpha_composite(rounded_panel(bw, bh, bh // 2, (*th.BAR_TRACK, 255)), (bx, by))
-    x = bx
-    for i, (k, _, col) in enumerate(segs):
-        v = stats[k] if stats else 0
-        sw = int(bw * v / n) if n else 0
-        if sw > 0:
-            img.alpha_composite(rounded_panel(sw, bh, bh // 2 if len(segs) == 1 else _px(2, ui),
-                                              (*col, 255)), (x, by))
-            x += sw
-    colw = (w - 2 * m) // 3
+def _session(pen, x, y, w, stats):
+    p = pen.p
+    n = stats["n"]
+    y += p(26)
+    pen.label((x, y), "SESSION")
+    pen.text((x + w, y), f"{n} game{'s' if n != 1 else ''}", 12, th.TEXT_DIM, "num", "rs")
+    y += p(12)
+    segs = [("caught", "Hunter", th.HUNTER), ("escaped", "Evader", th.EVADER),
+            ("timeout", "Time out", th.TIMEOUT)]
+    bh, gap = p(6), p(2)
+    shown = [(k, col) for k, _, col in segs if stats[k]]
+    avail = w - gap * max(0, len(shown) - 1)
+    bx = x
+    if not shown:
+        pen.rect((x, y, x + w, y + bh), fill=th.TRACK)
+    for i, (k, col) in enumerate(shown):
+        sw = avail - (bx - x - gap * i) if i == len(shown) - 1 else int(avail * stats[k] / n)
+        pen.rect((bx, y, bx + sw, y + bh), fill=col)
+        bx += sw + gap
+    y += bh + p(22)
+    colw = w / 3
     for i, (k, label, col) in enumerate(segs):
-        cx = m + i * colw
-        _text(d, (cx, _px(48, ui)), str(stats[k] if stats else 0), _px(20, ui), col, "bold")
-        _text(d, (cx, _px(48 + 24, ui)), label, _px(10, ui), th.TEXT_DIM)
-    return img
-
-
-def rules_card(w, rules, ui):
-    row = _px(19, ui)
-    lines = (len(rules) + 1) // 2
-    h = _px(36, ui) + row * lines
-    img = _card(w, h, ui)
-    d = ImageDraw.Draw(img)
-    m = _px(16, ui)
-    _text(d, (m, _px(10, ui)), "RULES", _px(11, ui), th.TEXT_DIM, "bold")
-    colw = (w - 2 * m) // 2
-    for i, (label, val) in enumerate(rules):
-        x = m + (i % 2) * colw
-        y = _px(30, ui) + (i // 2) * row
-        _text(d, (x, y), label, _px(11, ui), th.TEXT_DIM)
-        _text(d, (x + colw - _px(22, ui), y), val, _px(11, ui), th.TEXT, "bold", "ra")
-    return img
+        cx = x + i * colw
+        pen.rect((cx, y - p(9), cx + p(8), y - p(1)), fill=col)
+        pen.text((cx + p(14), y), label, 12, th.TEXT_DIM)
+        pen.text((cx + p(14) + pen.width(label, 12) + p(6), y), str(stats[k]), 13, th.TEXT, "num")
+    return y + p(6)
 
 
 def render_side_panel(width, height, s, ui):
-    w = width - _px(24, ui)
-    gap = _px(10, ui)
-    cards = [title_card(w, s, ui), status_card(w, s, ui),
-             agent_card(w, "hunter", s.hspec, s.probs.get("hunter"), ui),
-             agent_card(w, "evader", s.espec, s.probs.get("evader"), ui)]
-    if s.stats is not None:
-        cards.append(tally_card(w, s.stats, ui))
-    if s.rules:
-        cards.append(rules_card(w, s.rules, ui))
-    while len(cards) > 4 and sum(c.height for c in cards) + gap * len(cards) > height - gap:
-        cards.pop()
-    out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    y = gap // 2 + _px(4, ui)
-    for c in cards:
-        out.alpha_composite(c, (_px(12, ui), y))
-        y += c.height + gap
-    return out
-
-
-def status_strip(width, s, ui):
-    h = _px(26, ui)
-    img = Image.new("RGBA", (width, h), (0, 0, 0, 0))
-    x = 0
-    x += _chip(img, x, 0, "PAUSED" if s.paused else "PLAYING", th.ACCENT if s.paused else th.EXIT_GREEN, ui) + _px(6, ui)
-    if s.sps is not None:
-        x += _chip(img, x, 0, f"{s.sps:.0f} STEPS/S", th.TEXT_DIM, ui) + _px(6, ui)
-    if s.heat_tag:
-        _chip(img, x, 0, s.heat_tag.upper(), th.KEY_GOLD, ui)
-    return img
+    """One continuous column: header, situation, the two agents, session tally."""
+    img = Image.new("RGBA", (width, max(height, 2000)), (0, 0, 0, 0))
+    pen = Pen(img, ui)
+    p = pen.p
+    x, w = p(4), width - p(12)
+    y = p(16)
+    y = _header(pen, x, y, w, s)
+    sections = [lambda yy: _situation(pen, x, yy, w, s),
+                lambda yy: _agent(pen, x, yy, w, "hunter", s.hspec, s.probs.get("hunter"),
+                                  s.values.get("hunter")),
+                lambda yy: _agent(pen, x, yy, w, "evader", s.espec, s.probs.get("evader"),
+                                  s.values.get("evader"))]
+    if s.stats is not None and s.stats.get("n"):
+        sections.append(lambda yy: _session(pen, x, yy, w, s.stats))
+    for draw in sections:
+        y += p(14)
+        pen.rule(y, x, x + w)
+        y = draw(y)
+    return img.crop((0, 0, width, height))
 
 
 def key_strip(width, flags, ui):
-    f_key, f_lab = th.font(_px(11, ui), "bold"), th.font(_px(11, ui))
-    pad, gap = _px(14, ui), _px(14, ui)
-    h = _px(34, ui)
-    img = rounded_panel(width, h, _px(12, ui), th.PANEL_FILL, th.PANEL_EDGE, 1)
-    d = ImageDraw.Draw(img)
-    x = pad
+    """Keyboard shortcuts as one quiet line (wraps if the window is narrow)."""
+    fk, fl = th.font(_px(11, ui), "mono"), th.font(_px(11.5, ui))
+    gap, inner, line_h = _px(18, ui), _px(7, ui), _px(20, ui)
+    items, x, row = [], 0, 0
     for key, label in KEY_HELP:
-        kw = int(f_key.getlength(key)) + _px(12, ui)
-        on = flags.get(KEY_TOGGLES.get(key.strip(), ""), None)
-        cap = rounded_panel(kw, _px(20, ui), _px(5, ui), (*th.BAR_TRACK, 255),
-                            (*(th.ACCENT if on else th.PANEL_EDGE[:3]), 220), 1)
-        img.alpha_composite(cap, (x, (h - cap.height) // 2))
-        d.text((x + kw // 2, h // 2), key, font=f_key, fill=th.TEXT, anchor="mm")
-        x += kw + _px(6, ui)
-        d.text((x, h // 2), label, font=f_lab, fill=th.TEXT_DIM if on is not False else th.TEXT_FAINT, anchor="lm")
-        x += int(f_lab.getlength(label)) + gap
+        iw = fk.getlength(key) + inner + fl.getlength(label)
+        if x and x + iw > width:
+            x, row = 0, row + 1
+        items.append((x, row, key, label))
+        x += iw + gap
+    img = Image.new("RGBA", (width, line_h * (row + 1)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    for x, row, key, label in items:
+        on = flags.get(KEY_TOGGLES.get(key, ""), None)
+        cy = row * line_h + line_h // 2
+        d.text((x, cy), key, font=fk, fill=th.ACCENT if on else th.TEXT_DIM, anchor="lm")
+        d.text((x + fk.getlength(key) + inner, cy), label, font=fl,
+               fill=th.TEXT_FAINT if on is not False else th.RULE, anchor="lm")
     return img
 
 
 def legend_panel(ui, show_vision=True, show_trails=True, show_heat=False, capture=0):
-    icon = _px(38, ui)
-    tile = _px(21, ui)
+    icon = _px(34, ui)
+    tile = _px(20, ui)
     sprites, props = Sprites(tile), Props(tile, int(tile * 0.46))
     rows = [("Hunter", sprites.agent("hunter", "down")), ("Evader", sprites.agent("evader", "down")),
             ("Key", sprites.key()), ("Locked door", props.door(True)),
             ("Exit", None), ("Obstacle", props.obstacle("crate"))]
     if show_vision:
-        rows.append(("Vision cone", None))
+        rows.append(("What the agents see", None))
     if show_trails:
-        rows.append(("Trails", None))
+        rows.append(("Recent path", None))
     if show_heat:
-        rows.append(("Value heatmap", None))
+        rows.append(("Value V(s), low to high", None))
     if capture:
         rows.append(("Capture radius", None))
-    row_h = _px(27, ui)
+    row_h = _px(25, ui)
     f = th.font(_px(12, ui))
-    w = icon + _px(34, ui) + max(int(f.getlength(label)) for label, _ in rows)
-    h = row_h * len(rows) + _px(14, ui)
-    img = rounded_panel(w, h, _px(12, ui), th.PANEL_FILL, th.PANEL_EDGE, 1)
-    d = ImageDraw.Draw(img)
+    pad = _px(12, ui)
+    head = _px(26, ui)
+    w = pad + icon + _px(10, ui) + max(int(f.getlength(label)) for label, _ in rows) + pad
+    h = head + row_h * len(rows) + _px(8, ui)
+    img = rounded_panel(w, h, _px(3, ui), th.PANEL_FILL, th.PANEL_EDGE, 1)
+    pen = Pen(img, ui)
+    pen.label((pad, _px(19, ui)), "LEGEND")
+    d = pen.d
     for i, (label, spr) in enumerate(rows):
-        cy = _px(7, ui) + i * row_h + row_h // 2
-        cx = _px(10, ui) + icon // 2
+        cy = head + i * row_h + row_h // 2
+        cx = pad + icon // 2
         if label == "Exit":
             spr = props.exit_base()
         if spr is not None:
@@ -344,18 +438,20 @@ def legend_panel(ui, show_vision=True, show_trails=True, show_heat=False, captur
                 k = row_h / spr.height
                 spr = spr.resize((max(1, int(spr.width * k)), row_h), Image.LANCZOS)
             img.alpha_composite(spr, (cx - spr.width // 2, cy - spr.height // 2))
-        elif label == "Vision cone":
-            img.alpha_composite(rounded_panel(_px(26, ui), _px(18, ui), 5, (*th.EVADER, 90), (*th.EVADER, 200), 1),
-                                (cx - _px(13, ui), cy - _px(9, ui)))
-        elif label == "Trails":
+        elif label.startswith("What"):
+            d.rectangle([cx - _px(12, ui), cy - _px(8, ui), cx + _px(12, ui), cy + _px(8, ui)],
+                        fill=(*th.EVADER, 70), outline=(*th.EVADER, 200))
+        elif label == "Recent path":
             for k in range(3):
-                _dot(d, cx - _px(10, ui) + k * _px(10, ui), cy, _px(2 + k, ui), (*th.HUNTER, 90 + 70 * k))
-        elif label == "Value heatmap":
+                r = _px(2 + k, ui)
+                x0 = cx - _px(10, ui) + k * _px(10, ui)
+                d.ellipse([x0 - r, cy - r, x0 + r, cy + r], fill=(*th.HUNTER, 90 + 70 * k))
+        elif label.startswith("Value"):
             for k in range(5):
                 d.rectangle([cx - _px(15, ui) + k * _px(6, ui), cy - _px(6, ui),
                              cx - _px(10, ui) + k * _px(6, ui), cy + _px(6, ui)], fill=th.heat_color(k / 4))
         elif label == "Capture radius":
             d.ellipse([cx - _px(11, ui), cy - _px(11, ui), cx + _px(11, ui), cy + _px(11, ui)],
                       outline=(*th.HUNTER, 220), width=max(1, _px(2, ui)))
-        d.text((icon + _px(20, ui), cy), label, font=f, fill=th.TEXT, anchor="lm")
+        d.text((pad + icon + _px(10, ui), cy), label, font=f, fill=th.TEXT_DIM, anchor="lm")
     return img
