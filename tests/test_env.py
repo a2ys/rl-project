@@ -89,9 +89,9 @@ def test_oracle_hunter_catches_idle_evader():
 
 
 def test_gymnasium_api_check():
-    from stable_baselines3.common.env_checker import check_env
-    check_env(SingleAgentEnv(HUNTER, RandomAgent()), warn=True)
-    check_env(SingleAgentEnv(EVADER, ChaseHunter()), warn=True)
+    from gymnasium.utils.env_checker import check_env
+    check_env(SingleAgentEnv(HUNTER, RandomAgent()), skip_render_check=True)
+    check_env(SingleAgentEnv(EVADER, ChaseHunter()), skip_render_check=True)
 
 
 def test_capture_radius():
