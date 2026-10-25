@@ -1,0 +1,687 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{mlmodern}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=black,citecolor=black,filecolor=black]{hyperref}
+
+\definecolor{codebg}{RGB}{247,247,249}
+\definecolor{codekw}{RGB}{0,70,140}
+\definecolor{codecm}{RGB}{110,110,110}
+\definecolor{codestr}{RGB}{160,40,40}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecm}\itshape,
+  stringstyle=\color{codestr},
+  backgroundcolor=\color{codebg},
+  frame=single, rulecolor=\color{black!15},
+  breaklines=true, columns=fullflexible, keepspaces=true,
+  showstringspaces=false, xleftmargin=4pt, xrightmargin=4pt,
+  aboveskip=6pt, belowskip=6pt
+}
+
+\setlist{itemsep=2pt,topsep=3pt}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{Adaptive Curriculum and Self-Play for Generalizable Adversarial RL Agents}\\[4pt]
+\large Theory and Implementation Study Guide}
+\author{Aayush Shukla \and Aditya Kumar}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%=====================================================================
+\section{The Problem in One Paragraph}
+A \textbf{Hunter} and an \textbf{Evader} play on procedurally generated $21\times21$ dungeons.
+The Evader must find a key, open a locked door and reach the exit; the Hunter must catch it.
+Both move simultaneously (UP, DOWN, LEFT, RIGHT, STAY), see only a $9\times9$ line-of-sight
+window, and an episode lasts at most 200 steps. We train both agents with reinforcement learning
+(PPO and DQN, implemented from scratch on PyTorch tensors and autograd, no RL libraries) and ask:
+\emph{does structured training (curriculum + self-play) produce agents that generalize to unseen
+maps and are harder to exploit than naive simultaneous training?}
+
+\paragraph{Observation (496 numbers).} A $9\times9$ window with 6 binary channels
+(wall, door, key, exit, other agent, visible) $= 486$ values, plus 10 scalars (own position,
+key held, time fraction, direction and distance to target, other-agent visibility and
+relative position).
+
+\paragraph{Reward.} Win $+1$, loss $-1$, step penalty $-0.01$, shaping $0.01$ per tile of
+path-distance progress (Evader toward its objective, Hunter toward the Evader), Evader $+0.1$
+for the key and $+0.1$ for opening a door. The win/loss part is zero-sum; the shaping is not.
+
+%=====================================================================
+\section{Reinforcement Learning Foundations}
+
+\subsection{MDP, POMDP and Markov game}
+\begin{itemize}
+  \item \textbf{MDP} $(\mathcal{S},\mathcal{A},P,R,\gamma)$: state $s_t$, action $a_t\sim\pi(\cdot|s_t)$,
+        next state $s_{t+1}\sim P(\cdot|s_t,a_t)$, reward $r_t$.
+  \item \textbf{POMDP}: the agent sees an observation $o_t$ (our $9\times9$ window), not the full state.
+        A memoryless policy $\pi(a|o)$ may then need to be \emph{stochastic} to be optimal.
+  \item \textbf{Markov game} (stochastic game): several agents act at once; each agent's transition
+        and reward depend on the joint action. Ours is a two-player, (mostly) zero-sum, partially
+        observable Markov game.
+\end{itemize}
+
+\subsection{Return, value functions, advantage}
+\[
+G_t=\sum_{k=0}^{\infty}\gamma^k r_{t+k},\qquad
+V^\pi(s)=\E_\pi[G_t\mid s_t=s],\qquad
+Q^\pi(s,a)=\E_\pi[G_t\mid s_t=s,a_t=a],
+\]
+\[
+A^\pi(s,a)=Q^\pi(s,a)-V^\pi(s)\quad\text{(how much better $a$ is than the policy's average).}
+\]
+Bellman equations:
+$V^\pi(s)=\E_{a\sim\pi}\big[r+\gamma V^\pi(s')\big]$,\;
+$Q^*(s,a)=\E\big[r+\gamma\max_{a'}Q^*(s',a')\big]$.
+We use $\gamma=0.99$ (effective horizon $\approx 1/(1-\gamma)=100$ steps).
+
+\subsection{Two families of methods}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{Value-based (DQN)} & \textbf{Policy-gradient (PPO)}\\
+\midrule
+Learns & $Q(s,a)$, acts $\arg\max_a Q$ & $\pi_\theta(a|s)$ directly (+ critic $V$)\\
+Data & off-policy (replay buffer) & on-policy (fresh rollouts)\\
+Policy & deterministic ($\varepsilon$-greedy to explore) & stochastic by construction\\
+Stability & target network, replay & clipped updates\\
+Sample efficiency & higher (reuses data) & lower, but simpler and more stable\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Policy gradient theorem}
+For $J(\theta)=\E_{\pi_\theta}[G_0]$:
+\[
+\nabla_\theta J(\theta)=\E_{\pi_\theta}\big[\nabla_\theta\log\pi_\theta(a_t|s_t)\,A^{\pi}(s_t,a_t)\big].
+\]
+Intuition: increase the log-probability of actions that turned out better than average,
+decrease it for worse ones. REINFORCE uses $G_t$ in place of $A$ (high variance); subtracting a
+baseline $V(s)$ keeps the gradient unbiased but reduces variance $\Rightarrow$ \textbf{actor-critic}.
+
+%=====================================================================
+\section{Generalized Advantage Estimation (GAE)}
+The one-step TD error is $\delta_t=r_t+\gamma V(s_{t+1})(1-d_t)-V(s_t)$, where $d_t=1$ if the
+episode ended after step $t$. GAE averages $n$-step estimates with weight $\lambda$:
+\[
+\hat A_t=\sum_{l=0}^{\infty}(\gamma\lambda)^l\delta_{t+l}
+\quad\Longleftrightarrow\quad
+\hat A_t=\delta_t+\gamma\lambda(1-d_t)\hat A_{t+1}.
+\]
+$\lambda=0$: one-step TD (low variance, biased). $\lambda=1$: Monte-Carlo (unbiased, high variance).
+We use $\lambda=0.95$. Value targets are $\hat R_t=\hat A_t+V(s_t)$.
+
+\paragraph{Timeouts.} Treating a 200-step timeout as terminal is normally a bug (the state is
+not really terminal), but our observation contains the time fraction $t/200$, so time is part of the
+state and the episode end \emph{is} Markov. That is why we do not bootstrap on truncation.
+
+\begin{lstlisting}[title={\code{rl/ppo.py} -- RolloutBuffer.compute\_gae (exact)}]
+def compute_gae(self, last_values, gamma, lam):
+    # dones[t] = the episode ended after step t, so step t does not bootstrap.
+    # Timeouts are treated as terminal: the time fraction is part of the observation.
+    adv = np.zeros_like(self.rewards)
+    gae = np.zeros(self.N, np.float32)
+    next_v = last_values
+    for t in reversed(range(self.T)):
+        nonterm = 1.0 - self.dones[t]
+        delta = self.rewards[t] + gamma * next_v * nonterm - self.values[t]
+        gae = delta + gamma * lam * nonterm * gae
+        adv[t] = gae
+        next_v = self.values[t]
+    return adv, adv + self.values
+\end{lstlisting}
+The buffer has shape $(T,N)$: $T=256$ steps for each of $N=32$ parallel envs, i.e.\ 8192 samples per update.
+
+%=====================================================================
+\section{Proximal Policy Optimization (PPO)}
+
+\subsection{Why PPO exists}
+Vanilla policy gradient is very sensitive to step size: one large update can collapse the policy,
+and because the data is on-policy a bad policy then collects bad data. \textbf{TRPO} fixes this by
+constraining $\mathrm{KL}(\pi_{\text{old}}\,\|\,\pi_\theta)\le\delta$, but needs second-order
+optimisation. \textbf{PPO} (Schulman et al., 2017) gets a similar ``trust region'' effect with a
+simple clipped first-order objective, so it can safely do \emph{several epochs} of minibatch SGD on
+the same rollout.
+
+\subsection{The clipped surrogate objective}
+Probability ratio $\;r_t(\theta)=\dfrac{\pi_\theta(a_t|s_t)}{\pi_{\theta_\text{old}}(a_t|s_t)}=\exp(\log\pi_\theta-\log\pi_{\text{old}})$.
+\[
+L^{\text{CLIP}}(\theta)=\E_t\Big[\min\big(r_t\hat A_t,\;\operatorname{clip}(r_t,1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big],\qquad \epsilon=0.2.
+\]
+\begin{itemize}
+  \item If $\hat A_t>0$ (good action): the objective grows with $r_t$ only up to $1+\epsilon$; beyond that
+        the gradient is zero, so we cannot push the probability up too far in one update.
+  \item If $\hat A_t<0$ (bad action): it is capped at $1-\epsilon$, so we cannot push it down too far.
+  \item The $\min$ makes it a \emph{pessimistic} lower bound: clipping only ever removes incentive,
+        never adds it.
+\end{itemize}
+
+\subsection{Full loss}
+\[
+\mathcal{L}(\theta)=-L^{\text{CLIP}}
++c_v\,\tfrac12\,\E_t\big[(V_\theta(s_t)-\hat R_t)^2\big]
+-c_e\,\E_t\big[\mathcal{H}(\pi_\theta(\cdot|s_t))\big],
+\qquad c_v=0.5,\;c_e=0.01.
+\]
+The entropy bonus $\mathcal{H}=-\sum_a\pi\log\pi$ keeps the policy exploring.
+
+\subsection{Implementation details we use (and why)}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Detail} & \textbf{Value} & \textbf{Why}\\
+\midrule
+Networks & separate actor and critic MLPs, 256-256, tanh & no interference between losses\\
+Init & orthogonal; gain $\sqrt2$, actor head $0.01$, critic $1$ & near-uniform initial policy\\
+Rollout & 32 envs $\times$ 256 steps $=8192$ samples & lower-variance gradient\\
+Epochs / minibatch & 4 epochs, minibatch 512 & data reuse\\
+Advantage norm. & per minibatch, $(\hat A-\mu)/(\sigma+10^{-8})$ & scale-free updates\\
+KL early stop & stop if approx-KL $>1.5\times0.03$ & extra trust-region safety\\
+LR & $3\cdot10^{-4}$, Adam ($\epsilon{=}10^{-5}$), linear anneal to 10\% & stable late training\\
+Grad clipping & global norm $0.5$ & avoids exploding updates\\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Approx.\ KL} uses the estimator $\E[(r-1)-\log r]$, which is always $\ge0$ and low-variance.
+\textbf{Clip fraction} is the share of samples with $|r-1|>\epsilon$.
+\textbf{Explained variance} $1-\mathrm{Var}(\hat R-V)/\mathrm{Var}(\hat R)$ measures critic quality
+($1$ = perfect, $\le0$ = useless).
+
+\subsection{PPO algorithm}
+\begin{algorithm}[h]
+\caption{PPO (as implemented)}
+\begin{algorithmic}[1]
+\For{update $=1,\dots,U$}
+  \State Run $\pi_{\theta}$ in $N$ envs for $T$ steps; store $o_t,a_t,\log\pi_\text{old}(a_t|o_t),V(o_t),r_t,d_t$
+  \State Compute $\hat A_t,\hat R_t$ with GAE using $V(o_{T})$ as bootstrap
+  \State Set learning rate $\alpha\leftarrow\alpha_0\max(0.1,\,1-\text{progress})$
+  \For{epoch $=1,\dots,K$}
+    \For{each shuffled minibatch $B$}
+      \State $r\leftarrow\exp(\log\pi_\theta(a|o)-\log\pi_\text{old})$, normalise $\hat A$ over $B$
+      \State $\mathcal{L}\leftarrow -L^\text{CLIP}+c_v L^V-c_e\mathcal{H}$; Adam step with grad-norm clip
+      \If{approx-KL $>1.5\,\text{KL}_\text{target}$} \textbf{stop all epochs} \EndIf
+    \EndFor
+  \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Code: network and action sampling}
+\begin{lstlisting}[title={\code{rl/nets.py} -- mlp, ActorCritic, sample\_categorical (exact)}]
+def mlp(sizes, act=nn.Tanh, out_gain=1.0):
+    layers = []
+    for i in range(len(sizes) - 1):
+        lin = nn.Linear(sizes[i], sizes[i + 1])
+        last = i == len(sizes) - 2
+        nn.init.orthogonal_(lin.weight, out_gain if last else np.sqrt(2))
+        nn.init.zeros_(lin.bias)
+        layers.append(lin)
+        if not last:
+            layers.append(act())
+    return nn.Sequential(*layers)
+
+
+class ActorCritic(nn.Module):
+    """Separate policy and value MLPs (no shared trunk)."""
+
+    def __init__(self, obs_dim, n_actions, hidden=(256, 256)):
+        super().__init__()
+        self.obs_dim, self.n_actions, self.hidden = obs_dim, n_actions, list(hidden)
+        self.pi = mlp([obs_dim, *hidden, n_actions], out_gain=0.01)
+        self.v = mlp([obs_dim, *hidden, 1], out_gain=1.0)
+
+    def logits(self, obs):
+        return self.pi(obs)
+
+    def value(self, obs):
+        return self.v(obs).squeeze(-1)
+
+
+def sample_categorical(logits, deterministic=False, generator=None):
+    """Returns actions and their log-probabilities."""
+    logp_all = torch.log_softmax(logits, dim=-1)
+    if deterministic:
+        a = logits.argmax(-1)
+    else:
+        a = torch.multinomial(logp_all.exp(), 1, generator=generator).squeeze(-1)
+    return a, logp_all.gather(-1, a.unsqueeze(-1)).squeeze(-1)
+\end{lstlisting}
+
+\subsection{Code: the PPO update (core loop, exact)}
+\begin{lstlisting}[title={\code{rl/ppo.py} -- PPO.update (statistics bookkeeping omitted)}]
+def update(self, buf: RolloutBuffer, last_values, progress=0.0):
+    c = self.cfg
+    lr = c.lr * max(c.min_lr_frac, 1.0 - progress) if c.anneal_lr else c.lr
+    for g in self.opt.param_groups:
+        g["lr"] = lr
+
+    adv, ret = buf.compute_gae(last_values, c.gamma, c.gae_lambda)
+    n = buf.T * buf.N
+    obs = self._t(buf.obs.reshape(n, -1))
+    act = self._t(buf.actions.reshape(n))
+    old_logp = self._t(buf.logp.reshape(n))
+    adv_t = self._t(adv.reshape(n))
+    ret_t = self._t(ret.reshape(n))
+
+    for _ in range(c.epochs):
+        perm = torch.randperm(n, device=self.device)
+        for s in range(0, n, c.minibatch):
+            idx = perm[s:s + c.minibatch]
+            logp_all = torch.log_softmax(self.net.logits(obs[idx]), dim=-1)
+            logp = logp_all.gather(-1, act[idx].unsqueeze(-1)).squeeze(-1)
+            log_ratio = logp - old_logp[idx]
+            ratio = log_ratio.exp()
+
+            a = adv_t[idx]
+            a = (a - a.mean()) / (a.std() + 1e-8)
+            pg_loss = -torch.min(ratio * a,
+                                 ratio.clamp(1 - c.clip, 1 + c.clip) * a).mean()
+            v_loss = 0.5 * (self.net.value(obs[idx]) - ret_t[idx]).pow(2).mean()
+            entropy = -(logp_all.exp() * logp_all).sum(-1).mean()
+            loss = pg_loss + c.vf_coef * v_loss - c.ent_coef * entropy
+
+            self.opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(), c.max_grad_norm)
+            self.opt.step()
+
+            with torch.no_grad():
+                kl = ((ratio - 1) - log_ratio).mean().item()
+            if c.target_kl is not None and kl > 1.5 * c.target_kl:
+                ...  # early stop: break out of both loops
+\end{lstlisting}
+
+\subsection{Code: collecting a rollout}
+\begin{lstlisting}[title={\code{rl/ppo.py} -- PPO.act (exact)}]
+@torch.no_grad()
+def act(self, obs, deterministic=False):
+    o = self._t(obs)
+    a, logp = sample_categorical(self.net.logits(o), deterministic)
+    v = self.net.value(o)
+    return a.cpu().numpy(), logp.cpu().numpy(), v.cpu().numpy()
+\end{lstlisting}
+\begin{lstlisting}[title={\code{training/train.py} -- training loop skeleton (abridged)}]
+for u in range(n_updates):
+    for _ in range(T):                                   # T = 256 steps
+        actions = np.full((N, 2), -1, np.int64)          # -1 = scripted inside worker
+        for r in roles:                                  # learners act
+            idx = learner_envs[r]
+            a, logp, v = learners[r].act(obs[idx, ROLES.index(r)])
+            actions[idx, ROLES.index(r)] = a
+        ...                                              # frozen opponents act
+        obs, rew, done, eps = venv.step(actions)         # 8 worker processes
+        for r in roles:
+            bufs[r].add(o, a, logp, v, rew[idx, ROLES.index(r)], done[idx])
+    for r in roles:
+        last_v = learners[r].value(obs[idx, ROLES.index(r)])
+        learners[r].update(bufs[r], last_v, progress)
+    # curriculum.update(...), pool snapshot (self-play), periodic eval + checkpoint
+\end{lstlisting}
+
+%=====================================================================
+\section{Deep Q-Network (DQN)}
+
+\subsection{From Q-learning to DQN}
+Tabular Q-learning: $Q(s,a)\leftarrow Q(s,a)+\alpha\big[r+\gamma\max_{a'}Q(s',a')-Q(s,a)\big]$.
+DQN (Mnih et al., 2015) replaces the table with a neural net $Q_\phi$ and minimises
+$\big(Q_\phi(s,a)-y\big)^2$. Naively this diverges (``deadly triad'': function approximation +
+bootstrapping + off-policy data). DQN stabilises it with two tricks:
+\begin{enumerate}
+  \item \textbf{Experience replay}: store transitions in a buffer (ours: 200k, stored as float16) and
+        train on random minibatches, which breaks temporal correlation and reuses data.
+  \item \textbf{Target network} $Q_{\bar\phi}$: a frozen copy used for targets, synced every
+        2000 gradient steps, so the target does not move with every update.
+\end{enumerate}
+
+\subsection{Double DQN, Huber loss, exploration}
+Plain DQN target $y=r+\gamma(1-d)\max_{a'}Q_{\bar\phi}(s',a')$ \emph{overestimates} values
+(max of noisy estimates is biased upward). \textbf{Double DQN} decouples selection and evaluation:
+\[
+y=r+\gamma(1-d)\,Q_{\bar\phi}\big(s',\arg\max_{a'}Q_\phi(s',a')\big).
+\]
+The \textbf{Huber} (smooth-L1) loss is quadratic for small errors and linear for large ones,
+so outliers do not produce huge gradients. Exploration is $\varepsilon$-greedy with $\varepsilon$
+decaying linearly from $1.0$ to $0.05$ over the first 30\% of training. Learning starts after
+20k samples; lr $2.5\cdot10^{-4}$, batch 256.
+
+\begin{lstlisting}[title={\code{rl/dqn.py} -- DQN.act and DQN.train\_step (exact)}]
+@torch.no_grad()
+def act(self, obs, eps):
+    a = self.q(torch.as_tensor(obs, device=self.device)).argmax(-1).cpu().numpy()
+    rand = self.rng.random(len(a)) < eps
+    a[rand] = self.rng.integers(self.n_actions, size=int(rand.sum()))
+    return a
+
+def train_step(self):
+    c = self.cfg
+    o, a, r, o2, d = (torch.as_tensor(x, device=self.device)
+                      for x in self.buf.sample(c.batch_size))
+    q = self.q(o).gather(-1, a.unsqueeze(-1)).squeeze(-1)
+    with torch.no_grad():
+        if c.double:
+            a2 = self.q(o2).argmax(-1, keepdim=True)
+            q2 = self.target(o2).gather(-1, a2).squeeze(-1)
+        else:
+            q2 = self.target(o2).max(-1).values
+        y = r + c.gamma * (1 - d) * q2
+    loss = F.smooth_l1_loss(q, y)
+    self.opt.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(self.q.parameters(), c.max_grad_norm)
+    self.opt.step()
+    self.n_grad += 1
+    if self.n_grad % c.target_every == 0:
+        self.target.load_state_dict(self.q.state_dict())
+    return loss.item(), q.mean().item()
+\end{lstlisting}
+
+\paragraph{Why PPO is our main algorithm.} (1) In multi-agent training the opponent changes, so
+old replay data describes an outdated opponent; on-policy PPO always learns from current games.
+(2) Under partial observability, stochastic policies can be strictly better than any deterministic
+one; PPO learns a stochastic policy natively, DQN's $\arg\max$ is deterministic.
+(3) PPO is robust to hyper-parameters. DQN is our value-based baseline and gives real $Q$-values
+for the heatmaps.
+
+%=====================================================================
+\section{Multi-Agent Training: Independent Learning vs Self-Play}
+
+\subsection{Non-stationarity}
+From one agent's viewpoint, the opponent is part of the environment. If the opponent is also
+learning, the environment's dynamics change every update, so the Markov assumption behind
+single-agent RL is broken. Consequences: oscillation, \textbf{cycling} (A beats B, B adapts,
+A forgets how to beat older B) and \textbf{catastrophic forgetting}.
+
+\subsection{Our three training modes}
+\begin{description}
+  \item[single] one PPO learner vs a fixed opponent (scripted, or a frozen trained model).
+        Stationary, so it is the baseline.
+  \item[independent] both roles learn \emph{simultaneously} from the same games, each treating
+        the other as environment (``independent learners''). Naive, non-stationary.
+  \item[selfplay] each role learns against a \textbf{pool of frozen snapshots} of the other role.
+        Half of the 32 envs train the Hunter, half train the Evader.
+\end{description}
+\texttt{--steps} counts samples \emph{per learner}, so every mode gives each learner the same data.
+
+\subsection{Self-play with an opponent pool}
+\begin{itemize}
+  \item Every 50k samples, a frozen copy of each learner is added to its pool (max 20; oldest dropped).
+  \item At the start of each episode an env samples its opponent: the latest snapshot with
+        probability $0.5$, otherwise uniformly from the pool.
+  \item Playing the latest keeps pressure on current weaknesses; playing older ones prevents
+        forgetting and cycling. This is related to \emph{fictitious play}, where one best-responds to
+        the \emph{average} of past opponent strategies, which converges to a Nash equilibrium in
+        two-player zero-sum games. AlphaStar's league and OpenAI Five use the same idea.
+  \item The opponent is frozen during an episode, so each learner faces a stationary distribution
+        of opponents between snapshots.
+\end{itemize}
+\begin{lstlisting}[title={\code{rl/pool.py} -- OpponentPool (exact)}]
+class OpponentPool:
+    """Frozen snapshots of one role. Sampling: the latest snapshot with probability
+    `p_latest`, otherwise uniform over the whole pool. Oldest snapshots are dropped."""
+
+    def __init__(self, max_size=20, p_latest=0.5, seed=0):
+        self.items, self.max_size, self.p_latest = [], max_size, p_latest
+        self.rng = np.random.default_rng(seed)
+
+    def add(self, net, tag):
+        self.items.append(FrozenPolicy(net, tag))
+        if len(self.items) > self.max_size:
+            self.items.pop(0)
+
+    def sample(self):
+        if self.rng.random() < self.p_latest:
+            return self.items[-1]
+        return self.items[int(self.rng.integers(len(self.items)))]
+\end{lstlisting}
+
+\subsection{Measuring stability: cross-play}
+We save checkpoints of both roles during training and play every Hunter checkpoint against every
+Evader checkpoint. Entry $(i,j)$ is the Hunter win rate. In stable training a later Hunter beats
+all earlier Evaders, giving a monotone matrix; cycling shows up as non-transitive bands. We
+report a \emph{regression rate}: the fraction of (later, earlier) Hunter pairs where the later one
+is worse by more than $0.1$ against some Evader. Other stability metrics: the standard deviation of
+the validation win-rate curve over the second half of training, and the largest drop between
+consecutive evaluations.
+
+%=====================================================================
+\section{Curriculum Learning}
+\textbf{Idea} (Bengio et al., 2009): learn easy tasks first, then harder ones, the way humans
+are taught. In RL, the main benefit is against \textbf{sparse rewards}. On a full map a random
+agent almost never wins, so there is little signal. On a small map it wins often enough to learn
+basic skills, which transfer.
+
+\subsection{Our levels}
+Map complexity and scripted-opponent skill increase together
+(\code{opp\_eps} = probability the scripted opponent takes a random action).
+\begin{center}
+\begin{tabular}{cccccc}
+\toprule
+Level & Size & Rooms & Doors & Obstacles & \code{opp\_eps}\\
+\midrule
+0 & $13\times13$ & 3 & 0 & 0.0 & 0.75\\
+1 & $15\times15$ & 3 & 1 & 0.1 & 0.50\\
+2 & $17\times17$ & 4 & 1 & 0.1 & 0.25\\
+3 (target) & $21\times21$ & 5 & 1 & 0.2 & 0.00\\
+\bottomrule
+\end{tabular}
+\end{center}
+The observation is a fixed $9\times9$ egocentric window, so the same network works on every map
+size, which is what makes a size curriculum possible.
+
+\subsection{Adaptive rule}
+\begin{itemize}
+  \item \textbf{Single learner}: advance when its win rate over the last 300 episodes is $\ge0.6$.
+  \item \textbf{Two learners}: win rate is relative (it hovers around a balance), so instead we use
+        the \emph{decisive rate}: the share of games that end in a catch or an escape rather than a
+        timeout, $\ge0.8$. Timeouts mean neither agent is competent yet.
+  \item At least 50k samples per level; fallback: advance anyway after 20\% of the budget.
+  \item Modes \code{linear} (fixed schedule over the first 60\%) and \code{off} are the comparisons.
+\end{itemize}
+\begin{lstlisting}[title={\code{rl/curriculum.py} -- Curriculum.update (exact)}]
+def update(self, timesteps):
+    """Returns True if the level changed."""
+    if self.final or self.mode == "off":
+        return False
+    if self.mode == "linear":
+        per = self.ramp * self.total / (len(self.levels) - 1)
+        target = min(len(self.levels) - 1, int(timesteps // per))
+        advance = target > self.level
+    else:
+        at_level = timesteps - self.level_start
+        full = len(self.recent) == self.recent.maxlen
+        advance = (at_level >= self.min_steps and full and self.rate() >= self.threshold) \
+            or at_level >= self.max_steps
+    if advance:
+        self.level += 1
+        self.level_start = timesteps
+        self.recent.clear()
+        self.history.append((timesteps, self.level))
+    return advance
+\end{lstlisting}
+
+%=====================================================================
+\section{Generalization and Procedural Generation}
+Evaluating on training maps measures \emph{memorisation}. Procedural content generation (PCG)
+lets us create an unlimited number of distinct maps from integer seeds (Cobbe et al., Procgen, 2019),
+so generalization can be measured directly:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Split & Seeds & Use\\
+\midrule
+train & 0--999 & training only\\
+val & 10000--10199 & periodic evaluation during training\\
+test & 20000--20499 & final numbers only, never tuned on\\
+OOD & test seeds, $25\times25$, 7 rooms, 2 doors & out-of-distribution stress test\\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Generalization gap} $=$ win(train) $-$ win(test). A large positive gap means overfitting to
+layouts. The OOD drop $=$ win(test) $-$ win(OOD) measures robustness to larger, more complex maps.
+The generator (rooms + L-shaped corridors + a door on a cut corridor + key in the reachable region)
+validates that every map is solvable.
+
+%=====================================================================
+\section{Exploitability}
+In game theory, the exploitability of a strategy $\pi$ is how much a \emph{best response} to it
+gains: $\text{expl}(\pi)=\max_{\pi'}J(\pi',\pi)-J^\star$. A Nash-equilibrium strategy has
+exploitability 0. Exact best responses are intractable here, so we \textbf{approximate the best
+response by training a fresh PPO agent} against the frozen model and measure:
+\begin{itemize}
+  \item \textbf{samples to threshold}: samples until the fresh learner's rolling win rate (200 episodes)
+        reaches 50\%. Fewer samples $\Rightarrow$ more exploitable;
+  \item the final win rate and area under the learning curve against the frozen model.
+\end{itemize}
+Hypothesis: agents from self-play (which have faced many opponents) are harder to exploit than
+agents trained against one fixed opponent or with naive independent learning.
+
+%=====================================================================
+\section{Explainability: Decision Heatmaps}
+Win rate says \emph{whether} an agent works, not \emph{why}. For a fixed map and opponent position
+we place the agent on every walkable cell, compute its observation, and plot:
+\begin{itemize}
+  \item \textbf{Value map} $V(s)$ (PPO critic) or $\max_aQ(s,a)$ (DQN): where the agent believes it is
+        winning. A good Hunter's value rises near the exit it guards; a good Evader's value rises
+        along the path to key, door and exit.
+  \item \textbf{Policy arrows}: the most likely action per cell, length scaled by its probability.
+  \item \textbf{Entropy map} $\mathcal{H}(\pi(\cdot|s))$: where the agent is uncertain. High entropy
+        appears where the opponent is out of sight.
+\end{itemize}
+The live viewer also shows action probabilities as arrows around each agent in real time.
+
+%=====================================================================
+\section{Key Empirical Finding: Stochastic vs Greedy Policies}
+Evaluating the PPO Hunter (1M samples vs the scripted path Evader, 200 maps):
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Policy at test time & val win & test win & timeouts\\
+\midrule
+greedy ($\arg\max$) & 0.475 & 0.45 & 30--39\%\\
+sampled from $\pi$ & 0.68 & 0.705 & 9--12\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Explanation.} The policy is memoryless and the world is partially observable. When the
+Hunter loses sight of the Evader, many different states look identical, and a deterministic policy
+does the same thing in all of them. It oscillates (e.g.\ left--right) and runs out the clock.
+Sampling breaks these loops. This matches the theory: in POMDPs the best memoryless policy can be
+stochastic (Singh, Jaakkola \& Jordan, 1994). We therefore evaluate PPO by sampling, with a seeded
+generator so results are reproducible. A recurrent (LSTM) policy with memory would be the
+principled fix.
+
+%=====================================================================
+\section{Engineering Notes}
+\begin{itemize}
+  \item \textbf{Vectorized envs}: 32 envs in 8 worker processes (\code{multiprocessing} pipes);
+        scripted opponents run inside the workers, and policies run batched in the main process.
+        Throughput is $\sim$5.5--8k env steps/s, versus $\sim$475 with the earlier library-based version.
+  \item \textbf{Why a GPU barely helps}: about 75\% of time is the Python environment simulation
+        (line-of-sight per cell, BFS distances), which runs only on the CPU. The network is tiny
+        ($\approx$400k parameters), and the rollout loop is sequential (policy $\to$ env $\to$ policy).
+        By Amdahl's law, speeding up the remaining $\sim$25\% (updates) infinitely gives at most
+        $1/0.75\approx1.33\times$; realistically $1.1$--$1.2\times$.
+  \item \textbf{Batched evaluation}: all evaluation maps are played in lockstep with one batched
+        network call per step; it reproduces the earlier sequential results exactly.
+  \item \textbf{Tests}: 35 unit tests, e.g.\ GAE vs a reference implementation, a PPO bandit learning
+        check, and sync vs subprocess env equivalence.
+\end{itemize}
+
+%=====================================================================
+\section{Likely Questions and Short Answers}
+\begin{description}[style=nextline]
+  \item[What is PPO in one sentence?]
+  An actor-critic policy-gradient method that does several epochs of SGD on each batch of fresh
+  experience, while clipping the probability ratio so the new policy cannot move too far from the
+  old one.
+  \item[Why clip instead of a KL penalty?]
+  It is simpler (first-order, no adaptive penalty coefficient) and works as well in practice. We
+  still monitor KL and stop early as a safety net.
+  \item[Why is PPO on-policy if it reuses data for 4 epochs?]
+  The data comes from the policy just before the update. The ratio $r_t$ corrects for the small
+  change during the epochs, and clipping keeps that correction valid. Data is thrown away after
+  each update.
+  \item[What does the critic do?]
+  It estimates $V(s)$, which serves as the baseline for advantages (variance reduction) and for
+  bootstrapping in GAE.
+  \item[What do $\gamma$ and $\lambda$ control?]
+  $\gamma$: how far into the future rewards count. $\lambda$: the bias--variance trade-off of the
+  advantage estimate.
+  \item[Why entropy regularisation?]
+  It prevents premature collapse to a deterministic policy, keeping exploration going and the
+  policy stochastic, which matters under partial observability.
+  \item[Why does DQN need a target network and replay?]
+  Without them the targets move with every update and the samples are correlated, which together
+  with bootstrapping makes training diverge.
+  \item[What problem does Double DQN solve?]
+  Overestimation from taking the max over noisy Q-estimates. One network selects the action and
+  the other evaluates it.
+  \item[Why is independent learning unstable?]
+  Each agent's environment includes a learning opponent, so it is non-stationary. This leads to
+  chasing, cycling and forgetting.
+  \item[How does self-play fix that?]
+  The opponent is drawn from a pool of frozen past versions. This gives each update a fixed target
+  and keeps old strategies in the training mix, like fictitious play.
+  \item[Why a curriculum?]
+  On the full map rewards are sparse. Easy levels give a learning signal, and the skills transfer
+  because the observation is size-independent.
+  \item[How do you know the agent generalizes and does not memorise?]
+  Separate train/val/test seed ranges plus out-of-distribution larger maps. We report the
+  train$-$test gap, and test is never used for tuning.
+  \item[What is exploitability here?]
+  How quickly a fresh PPO agent learns to beat the frozen model, which approximates the
+  best-response value.
+  \item[Is the game zero-sum?]
+  The win/loss reward is ($+1/-1$). Step penalties and shaping make the total slightly non-zero-sum.
+  \item[Why were the Hunter's advantages (sprint, spawn near exit) needed?]
+  With equal speed and symmetric spawns the Evader won about 99\% of games, so there was no
+  competition to learn from. The handicaps balance the game.
+  \item[What is reward shaping and is it safe?]
+  Extra dense reward for progress (0.01 per tile). Potential-based shaping preserves optimal
+  policies; ours is a distance-difference, close to potential-based, and small relative to $\pm1$.
+\end{description}
+
+%=====================================================================
+\section{Limitations and Future Work}
+\begin{itemize}
+  \item Few seeds and a short training budget, so results are preliminary.
+  \item The memoryless MLP policy is weak under partial observability; an LSTM/GRU policy would help.
+  \item The pool samples opponents uniformly; prioritised fictitious self-play (sampling opponents
+        we lose to) would be stronger.
+  \item Exploitability is approximated by a single fresh PPO learner with a fixed budget.
+  \item A fully vectorized (array-based) environment would allow GPU acceleration.
+\end{itemize}
+
+\section*{References}
+\begin{enumerate}[label={[\arabic*]},leftmargin=*]
+  \item J. Schulman et al. \emph{Proximal Policy Optimization Algorithms.} arXiv:1707.06347, 2017.
+  \item J. Schulman et al. \emph{High-Dimensional Continuous Control Using Generalized Advantage Estimation.} ICLR, 2016.
+  \item J. Schulman et al. \emph{Trust Region Policy Optimization.} ICML, 2015.
+  \item V. Mnih et al. \emph{Human-level control through deep reinforcement learning.} Nature, 2015.
+  \item H. van Hasselt, A. Guez, D. Silver. \emph{Deep Reinforcement Learning with Double Q-learning.} AAAI, 2016.
+  \item Y. Bengio et al. \emph{Curriculum Learning.} ICML, 2009.
+  \item J. Heinrich, D. Silver. \emph{Deep Reinforcement Learning from Self-Play in Imperfect-Information Games.} 2016.
+  \item O. Vinyals et al. \emph{Grandmaster level in StarCraft II using multi-agent RL.} Nature, 2019.
+  \item K. Cobbe et al. \emph{Leveraging Procedural Generation to Benchmark Reinforcement Learning.} 2019.
+  \item S. Singh, T. Jaakkola, M. Jordan. \emph{Learning Without State-Estimation in Partially Observable Markovian Decision Processes.} ICML, 1994.
+  \item A. Ng, D. Harada, S. Russell. \emph{Policy invariance under reward transformations.} ICML, 1999.
+  \item R. Sutton, A. Barto. \emph{Reinforcement Learning: An Introduction.} 2nd ed., 2018.
+\end{enumerate}
+
+\end{document}

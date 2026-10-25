@@ -1,0 +1,369 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{mlmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=black,citecolor=black,filecolor=black]{hyperref}
+
+\definecolor{codebg}{RGB}{247,247,249}
+\definecolor{codekw}{RGB}{0,70,140}
+\definecolor{codecm}{RGB}{110,110,110}
+\definecolor{saybg}{RGB}{240,246,255}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecm}\itshape,
+  backgroundcolor=\color{codebg},
+  frame=single, rulecolor=\color{black!15},
+  breaklines=true, columns=fullflexible, keepspaces=true,
+  showstringspaces=false, xleftmargin=4pt, xrightmargin=4pt
+}
+\setlist{itemsep=2pt,topsep=3pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\showfile}[1]{\par\noindent\textbf{Show:} \code{#1}\par}
+
+\begin{document}
+
+\begin{center}
+{\large Reinforcement Learning Lab \;$\cdot$\; BCSE432E \;$\cdot$\; L55 + L56 \;$\cdot$\; Dr.\ Rajesh Kumar}\\[8pt]
+{\LARGE\bfseries Presentation Script}\\[4pt]
+{\large Adaptive Curriculum and Self-Play for Generalizable Adversarial RL Agents}\\[6pt]
+Aayush Shukla (23BPS1081) \quad Aditya Kumar (23BPS1163)
+\end{center}
+
+\noindent\rule{\textwidth}{0.4pt}
+
+\textit{How to use this: read the normal text out loud. ``Show'' tells you which file to open
+on screen. Code boxes are lines from our project; the comments on the right were added to
+explain them.}
+
+%=====================================================================
+\section{Opening}
+Our project is a game between two AI agents: a \textbf{Hunter} and an \textbf{Evader}.
+The Evader has to find a key, open a locked door and escape through the exit. The Hunter has to
+catch it before that happens.
+
+Every game is played on a new, randomly generated dungeon. So the real question is not
+``can the agent win on a map it has practised on'', but ``can it win on a map it has
+\emph{never seen}''. We also ask whether smart training methods, called \textbf{curriculum
+learning} and \textbf{self-play}, give better agents than simple training.
+
+We wrote the learning algorithms, \textbf{PPO} and \textbf{DQN}, ourselves from scratch. We did not
+use any ready-made reinforcement learning library.
+
+%=====================================================================
+\section{The Game}
+The map is a $21\times21$ grid with rooms, corridors, one locked door and one key. Each turn both
+agents move at the same time: up, down, left, right or stay. A game ends after at most 200 steps.
+
+Each agent sees only a small $9\times9$ area around itself, and walls block its view, like a
+torch in a dark dungeon. That makes the game hard, because the agents often do not know where
+the other one is.
+
+\textbf{Rewards}, which are the agent's ``score'': $+1$ for winning, $-1$ for losing, a tiny penalty
+every step so it does not waste time, and a small bonus for getting closer to its goal.
+
+\showfile{env/generator.py}
+Makes the maps. Each map comes from a seed number, so map 42 is always the same map. It also
+checks that every map can actually be solved.
+
+\showfile{env/dungeon\_env.py}
+The game rules: moves, catching, line of sight, and the rewards.
+
+%=====================================================================
+\section{What Reinforcement Learning Is}
+Reinforcement learning is learning by trial and error. The agent tries actions, gets rewards,
+and slowly learns which actions lead to more reward.
+
+Our agent learns two things:
+\begin{itemize}
+  \item \textbf{The policy}: given what I see, what is the chance of each move? This is the agent's
+        decision maker.
+  \item \textbf{The value} $V(s)$: from this situation, how much reward do I expect to get? This
+        is the agent's sense of ``am I winning right now?''
+\end{itemize}
+Both are small neural networks. The input is what the agent sees, 496 numbers. The policy
+network outputs 5 probabilities, one per move. The value network outputs one number.
+
+\showfile{rl/nets.py}
+\begin{lstlisting}
+class ActorCritic(nn.Module):
+    def __init__(self, obs_dim, n_actions, hidden=(256, 256)):
+        super().__init__()
+        self.pi = mlp([obs_dim, *hidden, n_actions], out_gain=0.01)   # policy: 496 -> 256 -> 256 -> 5
+        self.v = mlp([obs_dim, *hidden, 1], out_gain=1.0)            # value:  496 -> 256 -> 256 -> 1
+\end{lstlisting}
+``Actor'' is the policy that acts. ``Critic'' is the value network that judges how good the
+situation is.
+
+%=====================================================================
+\section{PPO: Our Main Algorithm}
+
+\subsection*{The idea in simple words}
+\begin{enumerate}
+  \item Let the agent play many games (32 games at once, 256 steps each).
+  \item For every move, ask: \emph{was this move better or worse than usual?} That number is
+        called the \textbf{advantage}.
+  \item Make good moves more likely and bad moves less likely.
+  \item \textbf{But do not change too much at once.} That last rule is what PPO adds.
+\end{enumerate}
+
+Why the last rule? If you change the policy too much in one go, the agent can suddenly forget
+everything and start playing badly. PPO stops this by limiting each change to about 20\%.
+
+\subsection*{The one equation to show}
+\[
+\text{PPO objective} \;=\; \text{average of}\;\; \min\Big(\,\text{ratio}\times A,\;\;
+\text{clip}(\text{ratio},\,0.8,\,1.2)\times A\,\Big)
+\]
+How to say it:
+\begin{itemize}
+  \item \textbf{ratio} = how much more (or less) likely the new policy makes this move than the old
+        one. 1 means no change.
+  \item $A$ = the advantage: positive means a good move, negative means a bad move.
+  \item \textbf{clip(ratio, 0.8, 1.2)} = we do not let the ratio go beyond $\pm20\%$.
+  \item Taking the \textbf{min} means we always use the more careful of the two. So the agent can
+        improve, but only in small, safe steps.
+\end{itemize}
+
+\showfile{rl/ppo.py  (PPO.update)}
+\begin{lstlisting}
+ratio = log_ratio.exp()                                     # new prob / old prob
+pg_loss = -torch.min(ratio * a,
+                     ratio.clamp(1 - c.clip, 1 + c.clip) * a).mean()   # the equation above
+v_loss = 0.5 * (self.net.value(obs[idx]) - ret_t[idx]).pow(2).mean()   # train the critic
+entropy = -(logp_all.exp() * logp_all).sum(-1).mean()                   # keep exploring
+loss = pg_loss + c.vf_coef * v_loss - c.ent_coef * entropy
+
+self.opt.zero_grad()
+loss.backward()                                             # compute gradients
+self.opt.step()                                             # gradient descent step (Adam)
+\end{lstlisting}
+Line by line:
+\begin{itemize}
+  \item \code{pg\_loss} is the PPO equation. The minus sign is because the optimiser
+        \emph{minimises}, and we want to \emph{maximise} the objective.
+  \item \code{v\_loss} teaches the critic to predict the real returns better.
+  \item \code{entropy} rewards the agent for not being too sure too early, so it keeps
+        trying new moves.
+  \item \code{backward()} and \code{step()} are the gradient descent: they nudge the network
+        weights in the direction that lowers the loss.
+\end{itemize}
+
+\subsection*{How we compute ``better or worse than usual'' (the advantage)}
+We use a method called \textbf{GAE}. In simple words: for each step, compare what actually
+happened (the reward plus the value of where we ended up) with what the critic expected. If
+reality was better than expected, the move was good. GAE adds these surprises up over the next
+few steps, with older ones counting less.
+
+\showfile{rl/ppo.py  (RolloutBuffer.compute\_gae)}
+\begin{lstlisting}
+for t in reversed(range(self.T)):
+    nonterm = 1.0 - self.dones[t]
+    delta = self.rewards[t] + gamma * next_v * nonterm - self.values[t]   # surprise at step t
+    gae = delta + gamma * lam * nonterm * gae                             # add up future surprises
+    adv[t] = gae
+    next_v = self.values[t]
+\end{lstlisting}
+
+%=====================================================================
+\section{DQN: Our Second Algorithm}
+DQN learns a different thing: a \textbf{Q-value} $Q(s,a)$ for every move, meaning ``how good
+is it to make move $a$ in situation $s$''. Then it simply picks the move with the highest Q-value.
+
+\subsection*{The second equation to show}
+\[
+\text{target} \;=\; \text{reward} \;+\; 0.99 \times \text{best Q-value of the next situation}
+\]
+How to say it: ``The value of a move is the reward I get now, plus the value of the best thing I
+can do next.'' The $0.99$ means future rewards count slightly less than immediate ones. The network
+is trained to make its Q-value match this target.
+
+Two tricks make DQN stable:
+\begin{itemize}
+  \item \textbf{Replay buffer}: store past experiences and learn from random old samples, not
+        just the latest ones.
+  \item \textbf{Target network}: a frozen copy of the network that computes the target, updated
+        only every 2000 steps, so the target does not keep moving.
+\end{itemize}
+
+\showfile{rl/dqn.py  (DQN.train\_step)}
+\begin{lstlisting}
+q = self.q(o).gather(-1, a.unsqueeze(-1)).squeeze(-1)     # current Q-value of the move we made
+with torch.no_grad():
+    a2 = self.q(o2).argmax(-1, keepdim=True)              # best next move (online network)
+    q2 = self.target(o2).gather(-1, a2).squeeze(-1)       # its value (target network)
+    y = r + c.gamma * (1 - d) * q2                        # the equation above
+loss = F.smooth_l1_loss(q, y)                             # make Q close to the target
+\end{lstlisting}
+\textbf{Why PPO is our main algorithm}: in our game the opponent keeps changing while it learns, so
+old stored experiences go out of date, which hurts DQN. Also, PPO's policy is naturally
+random-ish, which turned out to matter a lot (Section~\ref{sec:finding}).
+
+%=====================================================================
+\section{How We Train Two Agents Against Each Other}
+We compare three ways of training:
+\begin{itemize}
+  \item \textbf{Single}: one agent learns against a fixed, hand-written opponent. This is the
+        simple baseline.
+  \item \textbf{Independent}: both agents learn at the same time. The problem is that each one is
+        chasing a moving target. The Hunter learns a trick, the Evader learns to counter it, the
+        Hunter forgets its old skill, and they go round in circles.
+  \item \textbf{Self-play}: each agent plays against a \textbf{pool of frozen old copies} of the
+        other one. Because the old copies do not change, the agent has a stable target, and
+        because it keeps meeting old opponents, it does not forget how to beat them.
+\end{itemize}
+
+\showfile{rl/pool.py}
+\begin{lstlisting}
+def sample(self):
+    if self.rng.random() < self.p_latest:          # 50%: play the newest copy
+        return self.items[-1]
+    return self.items[int(self.rng.integers(len(self.items)))]   # 50%: any older copy
+\end{lstlisting}
+Every 50{,}000 steps we save a new frozen copy into the pool, which holds at most 20.
+
+\showfile{training/train.py}
+The main training loop. It chooses the mode with \code{--mode single / independent / selfplay}.
+
+%=====================================================================
+\section{Curriculum Learning}
+At the start the agent knows nothing. On the full map it almost never wins, so it has almost
+nothing to learn from. Curriculum learning is like school: start with easy lessons, move up when
+you are ready.
+
+\begin{center}
+\begin{tabular}{ccccc}
+\toprule
+Level & Map size & Doors & Obstacles & Opponent plays randomly\\
+\midrule
+0 & $13\times13$ & 0 & none & 75\% of the time\\
+1 & $15\times15$ & 1 & few  & 50\%\\
+2 & $17\times17$ & 1 & few  & 25\%\\
+3 & $21\times21$ & 1 & more & never (full skill)\\
+\bottomrule
+\end{tabular}
+\end{center}
+The agent moves to the next level when it wins at least 60\% of its recent games. When both agents
+are learning, we instead check that at least 80\% of games end with a catch or an escape, and not
+a timeout.
+
+\showfile{rl/curriculum.py}
+\begin{lstlisting}
+advance = (at_level >= self.min_steps and full and self.rate() >= self.threshold) \
+    or at_level >= self.max_steps            # good enough, or stayed too long
+if advance:
+    self.level += 1
+\end{lstlisting}
+
+%=====================================================================
+\section{How We Test the Agents}
+\begin{itemize}
+  \item \textbf{Unseen maps}: we train on maps 0--999 and test on maps 20000--20499, which the
+        agent has never seen. We also test on bigger $25\times25$ maps with two doors, which are
+        harder than anything it trained on.
+  \item \textbf{Generalization gap}: win rate on training maps minus win rate on test maps. If it is
+        close to zero, the agent learned real skills and did not just memorise maps.
+  \item \textbf{Exploitability}: we freeze a trained Hunter and train a brand-new Evader against it.
+        If the new Evader learns to beat it quickly, the Hunter has a weakness. A strong Hunter
+        takes much longer to beat.
+  \item \textbf{Cross-play}: we play old and new versions against each other to check whether
+        training keeps improving or goes round in circles.
+\end{itemize}
+
+\showfile{evaluation/generalization.py, evaluation/exploitability.py, evaluation/crossplay.py}
+
+%=====================================================================
+\section{Seeing Inside the Agent (Heatmaps)}
+Win rate tells us \emph{if} the agent is good, not \emph{why}. So we put the agent on every square
+of the map and ask its value network how good that square is. We colour the map with those values
+and draw an arrow for the move it would pick.
+
+You can read the agent's thinking from this: for example, the Hunter's value is high near the exit,
+because that is where it can block the Evader.
+
+\showfile{visualization/decision\_map.py, visualization/live.py (press H in the viewer)}
+
+%=====================================================================
+\section{Our Most Interesting Finding}
+\label{sec:finding}
+We tested the trained Hunter in two ways: always picking its single most likely move, or
+choosing randomly according to its probabilities.
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+How the Hunter picks moves & Win rate on unseen maps & Games that time out\\
+\midrule
+Always the most likely move & 45\% & 30--39\%\\
+Random, by its probabilities & 70\% & about 10\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+Why? The Hunter cannot see far. When it loses sight of the Evader, many places look exactly the
+same to it, so a fixed rule makes it walk left-right-left-right forever. A bit of randomness breaks
+that loop. This matches known theory: when an agent cannot see everything, a random-ish policy can
+be the best one.
+
+%=====================================================================
+\section{Closing}
+To sum up: we built a dungeon chase game with random maps, wrote PPO and DQN ourselves, trained the
+agents in three different ways with and without a curriculum, tested them on maps they had never
+seen, measured how easy they are to beat, and made heatmaps to explain their decisions.
+
+%=====================================================================
+\section*{Where Is What (for quick reference)}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Topic} & \textbf{File}\\
+\midrule
+Map generator & \code{env/generator.py}\\
+Game rules, rewards & \code{env/dungeon\_env.py}\\
+Neural networks & \code{rl/nets.py}\\
+PPO (update, GAE) & \code{rl/ppo.py}\\
+DQN & \code{rl/dqn.py}\\
+Self-play pool & \code{rl/pool.py}\\
+Curriculum & \code{rl/curriculum.py}\\
+Running 32 games in parallel & \code{rl/vec\_env.py}\\
+Training (all modes) & \code{training/train.py}, \code{training/train\_dqn.py}\\
+Hand-written opponents & \code{agents/scripted.py}\\
+Testing on unseen maps & \code{evaluation/generalization.py}\\
+Exploitability, cross-play & \code{evaluation/exploitability.py}, \code{evaluation/crossplay.py}\\
+Heatmaps, live viewer & \code{visualization/decision\_map.py}, \code{visualization/live.py}\\
+Results page & \code{visualization/dashboard.py} $\rightarrow$ \code{experiments/dashboard.html}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{If They Ask\dots{} (short answers)}
+\begin{description}[style=nextline]
+  \item[What is PPO?] A method that improves the agent's policy in small, safe steps, so it never
+        changes too much at once.
+  \item[What is DQN?] A method that learns how good each move is, the Q-value, and picks the best one.
+  \item[Difference between V and Q?] $V$ = how good the situation is. $Q$ = how good a specific move
+        is in that situation.
+  \item[What is the critic for?] It tells the policy what ``normal'' looks like, so we can tell if a
+        move was better or worse than usual.
+  \item[Why self-play?] Training against a mix of old frozen opponents is stable and stops the agent
+        forgetting.
+  \item[Why curriculum?] On the full map early rewards are too rare. Easy maps first give the agent
+        something to learn from.
+  \item[Why not use the GPU?] Most of the time is spent running the game itself, which runs on the
+        CPU. The network is tiny, so the GPU would save very little time.
+  \item[What did you write yourselves?] PPO, DQN, the networks, the parallel game runner, self-play,
+        the curriculum, evaluation and visualization. We used PyTorch only for the basic maths
+        (tensors and gradients).
+\end{description}
+
+\end{document}
