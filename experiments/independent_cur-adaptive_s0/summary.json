@@ -1,0 +1,117 @@
+{
+  "mode": "independent",
+  "curriculum": "adaptive",
+  "roles": [
+    "hunter",
+    "evader"
+  ],
+  "samples_per_learner": 507904,
+  "env_steps": 507904,
+  "minutes": 4.02,
+  "curriculum_history": [
+    [
+      0,
+      0
+    ],
+    [
+      106496,
+      1
+    ],
+    [
+      212992,
+      2
+    ],
+    [
+      319488,
+      3
+    ]
+  ],
+  "generalization": {
+    "hunter": {
+      "train": {
+        "win": 0.205,
+        "n": 200,
+        "hunter_win": 0.205,
+        "evader_win": 0.795,
+        "timeout": 0.0,
+        "mean_len": 47.165,
+        "ret_hunter": -0.8600500000000001,
+        "ret_evader": 0.6111
+      },
+      "val": {
+        "win": 0.255,
+        "n": 200,
+        "hunter_win": 0.255,
+        "evader_win": 0.745,
+        "timeout": 0.0,
+        "mean_len": 47.325,
+        "ret_hunter": -0.7644,
+        "ret_evader": 0.49465000000000003
+      },
+      "test": {
+        "win": 0.19,
+        "n": 200,
+        "hunter_win": 0.19,
+        "evader_win": 0.81,
+        "timeout": 0.0,
+        "mean_len": 45.48,
+        "ret_hunter": -0.87725,
+        "ret_evader": 0.6446000000000001
+      },
+      "ood": {
+        "win": 0.26,
+        "n": 200,
+        "hunter_win": 0.26,
+        "evader_win": 0.74,
+        "timeout": 0.0,
+        "mean_len": 58.91,
+        "ret_hunter": -0.8892500000000001,
+        "ret_evader": 0.5866500000000001
+      },
+      "gap_train_test": 0.014999999999999986
+    },
+    "evader": {
+      "train": {
+        "win": 0.0,
+        "n": 200,
+        "hunter_win": 1.0,
+        "evader_win": 0.0,
+        "timeout": 0.0,
+        "mean_len": 36.19,
+        "ret_hunter": 0.87245,
+        "ret_evader": -1.2471
+      },
+      "val": {
+        "win": 0.0,
+        "n": 200,
+        "hunter_win": 1.0,
+        "evader_win": 0.0,
+        "timeout": 0.0,
+        "mean_len": 34.22,
+        "ret_hunter": 0.8947499999999999,
+        "ret_evader": -1.2170500000000002
+      },
+      "test": {
+        "win": 0.0,
+        "n": 200,
+        "hunter_win": 0.995,
+        "evader_win": 0.0,
+        "timeout": 0.005,
+        "mean_len": 36.305,
+        "ret_hunter": 0.86315,
+        "ret_evader": -1.24265
+      },
+      "ood": {
+        "win": 0.0,
+        "n": 200,
+        "hunter_win": 0.995,
+        "evader_win": 0.0,
+        "timeout": 0.005,
+        "mean_len": 45.36,
+        "ret_hunter": 0.8097,
+        "ret_evader": -1.2477500000000001
+      },
+      "gap_train_test": 0.0
+    }
+  }
+}

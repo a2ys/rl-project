@@ -1,0 +1,16 @@
+timesteps,level,hunter,evader,split,hunter_win,evader_win,timeout,mean_len
+106496,1,ppo,path,val,0.1,0.9,0.0,50.11
+106496,1,chase,ppo,val,1.0,0.0,0.0,43.31
+106496,1,ppo,ppo,val,0.12,0.0,0.88,189.42
+204800,1,ppo,path,val,0.16,0.84,0.0,47.39
+204800,1,chase,ppo,val,1.0,0.0,0.0,43.86
+204800,1,ppo,ppo,val,0.16,0.0,0.84,184.66
+303104,2,ppo,path,val,0.2,0.8,0.0,45.63
+303104,2,chase,ppo,val,1.0,0.0,0.0,40.7
+303104,2,ppo,ppo,val,0.47,0.0,0.53,148.52
+401408,3,ppo,path,val,0.29,0.71,0.0,45.3
+401408,3,chase,ppo,val,1.0,0.0,0.0,40.94
+401408,3,ppo,ppo,val,0.55,0.02,0.43,132.98
+507904,3,ppo,path,val,0.26,0.74,0.0,45.76
+507904,3,chase,ppo,val,1.0,0.0,0.0,34.6
+507904,3,ppo,ppo,val,0.7,0.02,0.28,114.07

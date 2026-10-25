@@ -1,0 +1,62 @@
+{
+  "algo": "dqn",
+  "mode": "single",
+  "curriculum": "off",
+  "roles": [
+    "evader"
+  ],
+  "samples_per_learner": 500000,
+  "env_steps": 500000,
+  "minutes": 10.43,
+  "curriculum_history": [
+    [
+      0,
+      3
+    ]
+  ],
+  "generalization": {
+    "evader": {
+      "train": {
+        "win": 0.26,
+        "n": 200,
+        "hunter_win": 0.1,
+        "evader_win": 0.26,
+        "timeout": 0.64,
+        "mean_len": 165.13,
+        "ret_hunter": -1.5931500000000012,
+        "ret_evader": -1.363100000000001
+      },
+      "val": {
+        "win": 0.2,
+        "n": 200,
+        "hunter_win": 0.175,
+        "evader_win": 0.2,
+        "timeout": 0.625,
+        "mean_len": 160.915,
+        "ret_hunter": -1.412550000000001,
+        "ret_evader": -1.4580500000000012
+      },
+      "test": {
+        "win": 0.125,
+        "n": 200,
+        "hunter_win": 0.15,
+        "evader_win": 0.125,
+        "timeout": 0.725,
+        "mean_len": 171.97,
+        "ret_hunter": -1.4805500000000011,
+        "ret_evader": -1.648550000000001
+      },
+      "ood": {
+        "win": 0.12,
+        "n": 200,
+        "hunter_win": 0.115,
+        "evader_win": 0.12,
+        "timeout": 0.765,
+        "mean_len": 178.145,
+        "ret_hunter": -1.5592000000000013,
+        "ret_evader": -1.6209000000000016
+      },
+      "gap_train_test": 0.135
+    }
+  }
+}

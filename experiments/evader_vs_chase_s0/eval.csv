@@ -1,0 +1,6 @@
+timesteps,level,hunter,evader,split,hunter_win,evader_win,timeout,mean_len
+106496,3,chase,ppo,val,1.0,0.0,0.0,39.51
+204800,3,chase,ppo,val,0.97,0.03,0.0,22.55
+303104,3,chase,ppo,val,0.91,0.09,0.0,20.92
+401408,3,chase,ppo,val,0.91,0.09,0.0,20.5
+507904,3,chase,ppo,val,0.89,0.11,0.0,20.82
